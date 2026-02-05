@@ -393,6 +393,19 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// === LIMPIAR MARKDOWN PARA REDES SOCIALES ===
+// Facebook, Instagram, etc. no renderizan markdown — los ** se muestran como asteriscos
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*\*(.*?)\*\*\*/g, '$1')   // ***bold italic*** → text
+    .replace(/\*\*(.*?)\*\*/g, '$1')        // **bold** → text
+    .replace(/\*(.*?)\*/g, '$1')            // *italic* → text
+    .replace(/~~(.*?)~~/g, '$1')            // ~~strikethrough~~ → text
+    .replace(/`(.*?)`/g, '$1')              // `code` → text
+    .replace(/^#{1,6}\s+/gm, '')            // ### headers → text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // [link](url) → link text
+}
+
 // === EJECUTAR TOOLS ===
 
 async function executeTool(
@@ -470,9 +483,11 @@ async function executeTool(
         };
 
         // Construir el body para Late.dev vía /api/social
+        // Limpiar markdown del contenido — redes sociales no lo renderizan
+        const cleanContent = stripMarkdown(input.content);
         const publishBody: Record<string, unknown> = {
           action: input.publish_now ? 'publish' : 'schedule',
-          content: input.content,
+          content: cleanContent,
           platforms: input.platforms.map((p) => ({
             platform: p.platform,
             accountId: p.account_id,
