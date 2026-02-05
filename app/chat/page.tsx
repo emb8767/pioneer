@@ -1,0 +1,146 @@
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export default function ChatPage() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll al último mensaje
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Mensaje de bienvenida
+  useEffect(() => {
+    if (messages.length === 0) {
+      setMessages([
+        {
+          role: 'assistant',
+          content:
+            '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
+        },
+      ]);
+    }
+  }, []);
+
+  const sendMessage = async () => {
+    if (!input.trim() || isLoading) return;
+
+    const userMessage: Message = { role: 'user', content: input.trim() };
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      // Filtrar el mensaje de bienvenida para no enviarlo a la API
+      const messagesToSend = newMessages.slice(1);
+      
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: messagesToSend }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Error en la respuesta del servidor');
+      }
+
+      const data = await response.json();
+      setMessages([...newMessages, { role: 'assistant', content: data.message }]);
+    } catch (error) {
+      console.error('Error:', error);
+      setMessages([
+        ...newMessages,
+        {
+          role: 'assistant',
+          content:
+            'Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.',
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white border-b px-6 py-4">
+        <h1 className="text-xl font-semibold text-gray-800">Pioneer Agent</h1>
+        <p className="text-sm text-gray-500">Su asistente de marketing digital</p>
+      </header>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="max-w-3xl mx-auto space-y-4">
+          {messages.map((message, index) => (
+            <div
+              key={index}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div
+                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                  message.role === 'user'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white border border-gray-200 text-gray-800'
+                }`}
+              >
+                <p className="whitespace-pre-wrap">{message.content}</p>
+              </div>
+            </div>
+          ))}
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3">
+                <div className="flex space-x-2">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.1s]" />
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.2s]" />
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+
+      {/* Input */}
+      <div className="border-t bg-white px-4 py-4">
+        <div className="max-w-3xl mx-auto flex gap-3">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyPress}
+            placeholder="Escriba su mensaje..."
+            className="flex-1 resize-none rounded-xl border border-gray-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            rows={1}
+            disabled={isLoading}
+          />
+          <button
+            onClick={sendMessage}
+            disabled={isLoading || !input.trim()}
+            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+          >
+            Enviar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
