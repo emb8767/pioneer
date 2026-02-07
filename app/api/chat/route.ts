@@ -14,6 +14,7 @@ import {
   LateApiError,
 } from '@/lib/late-client';
 import { generateContent, PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
+import { generateImage, suggestAspectRatio, buildImagePrompt } from '@/lib/replicate-client';
 import type { Platform, LatePlatformTarget } from '@/lib/types';
 
 // Inicializar cliente de Anthropic
@@ -149,6 +150,42 @@ Reglas de contenido:
 - Cada post debe tener un CTA claro
 - Respetar las restricciones de contenido prohibido
 
+=== IMAGE GENERATOR (Fase C) — TOOL generate_image ===
+
+Pioneer puede generar imágenes con IA para acompañar posts de redes sociales.
+
+FLUJO CORRECTO PARA IMÁGENES:
+1. Después de generar texto con generate_content, SIEMPRE preguntar al cliente:
+   "¿Desea acompañar este post con una imagen?
+   - Puedo generar una imagen con inteligencia artificial ($0.015)
+   - Puede enviarme una foto de su producto (próximamente)
+   - O puede publicar solo con texto"
+
+2. Si el cliente quiere imagen AI → usar generate_image
+3. Mostrar la imagen al cliente (URL) y pedir aprobación
+4. Si aprueba → publicar con publish_post incluyendo la URL en media_urls
+
+REGLAS DE IMÁGENES:
+- NUNCA generar imagen sin que el cliente lo solicite o acepte
+- Schnell ($0.015) es el modelo por defecto. Solo usar Pro ($0.275) si el cliente pide mejor calidad
+- El prompt de imagen debe ser en INGLÉS (FLUX funciona mejor en inglés)
+- El prompt debe describir visualmente lo que se necesita, sin texto en la imagen
+- Siempre incluir "no text overlay" en el prompt
+- Informar al cliente que la imagen está disponible por tiempo limitado
+- Si el cliente pide imagen directamente (sin plan), generarla y preguntar si quiere publicarla
+
+CUANDO EL CLIENTE DICE QUE TIENE FOTO PROPIA:
+- Responder: "¡Excelente idea! La función de subir fotos estará disponible próximamente. Por ahora, puedo generar una imagen AI o publicar solo con texto. ¿Qué prefiere?"
+
+ASPECT RATIOS POR PLATAFORMA:
+- Instagram: 4:5 (más pantalla en feed)
+- Facebook: 1:1
+- Twitter: 16:9
+- LinkedIn: 1:1
+- TikTok: 9:16
+- Pinterest: 2:3
+- Si es para múltiples plataformas: usar 1:1 (universal)
+
 === SOCIAL PUBLISHER (Fase B.5) — TOOLS DISPONIBLES ===
 
 Tienes acceso a las siguientes herramientas (tools) para ejecutar acciones reales:
@@ -166,22 +203,33 @@ Tienes acceso a las siguientes herramientas (tools) para ejecutar acciones reale
    - Úsala DESPUÉS de que el cliente apruebe un plan
    - Muestra el contenido generado al cliente para su aprobación
 
-4. **publish_post** — Publica o programa un post en las redes conectadas.
+4. **generate_image** — Genera una imagen con IA para acompañar un post.
+   - Úsala DESPUÉS de que el cliente acepte tener imagen AI
+   - O cuando el cliente pide una imagen directamente
+   - El prompt DEBE ser en inglés
+   - Muestra la URL de la imagen al cliente para su aprobación
+
+5. **publish_post** — Publica o programa un post en las redes conectadas.
    - SOLO úsala DESPUÉS de que el cliente apruebe EXPLÍCITAMENTE el contenido
    - NUNCA publicar sin aprobación
    - Puede publicar ahora o programar para fecha futura
+   - Para incluir imagen, pasar la URL en media_urls
 
-FLUJO CORRECTO:
+FLUJO CORRECTO COMPLETO:
 1. Cliente da objetivo → Pioneer genera plan → Cliente aprueba plan
-2. Pioneer usa generate_content → Muestra contenido → Cliente aprueba contenido
-3. Pioneer usa list_connected_accounts → Verifica que las redes están conectadas
-4. Pioneer usa publish_post → Confirma publicación exitosa
+2. Pioneer usa generate_content → Muestra texto → Cliente lo ve
+3. Pioneer pregunta si quiere imagen → Cliente decide
+4. Si quiere imagen AI → Pioneer usa generate_image → Muestra imagen
+5. Cliente aprueba texto (+ imagen si la hay)
+6. Pioneer usa list_connected_accounts → Verifica redes conectadas
+7. Pioneer usa publish_post (con media_urls si hay imagen) → Confirma publicación
 
 REGLAS DE TOOLS:
 - NUNCA llamar publish_post sin aprobación explícita del cliente
 - SIEMPRE verificar cuentas conectadas antes de publicar
 - Si no hay cuentas conectadas, ofrecer generate_connect_url
 - Si un tool falla, explicar el error al cliente y ofrecer alternativas
+- SIEMPRE preguntar sobre imagen después de generar texto
 
 === REDES SOCIALES - LATE.DEV ===
 
@@ -198,6 +246,7 @@ Cuando publique exitosamente, confirmar así:
 - Plataformas: [lista]
 - Estado: Publicado / Programado para [fecha]
 - ID: [post_id]
+- Imagen: Incluida / Sin imagen
 
 === ONBOARDING ===
 
@@ -336,6 +385,38 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'generate_image',
+    description:
+      'Genera una imagen con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Úsala cuando el cliente acepta tener una imagen AI, o cuando pide una imagen directamente. El prompt DEBE ser en inglés. Las URLs de imagen expiran en 1 hora — publicar pronto después de generar.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: {
+          type: 'string',
+          description:
+            'Descripción de la imagen a generar. DEBE ser en inglés. Ejemplo: "professional photograph, fresh artisan bread on rustic wooden table, warm lighting, bakery, appetizing, no text overlay"',
+        },
+        model: {
+          type: 'string',
+          enum: ['schnell', 'pro'],
+          description:
+            'Modelo a usar. schnell ($0.015) = rápido y económico (default). pro ($0.275) = mejor calidad.',
+        },
+        aspect_ratio: {
+          type: 'string',
+          enum: ['1:1', '16:9', '21:9', '2:3', '3:2', '4:5', '5:4', '9:16', '9:21'],
+          description:
+            'Proporción de la imagen. Usar 4:5 para Instagram, 1:1 para Facebook, 16:9 para Twitter, 9:16 para TikTok. Si es para múltiples plataformas, usar 1:1.',
+        },
+        num_outputs: {
+          type: 'number',
+          description: 'Número de imágenes a generar (1-4). Default: 1.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
     name: 'publish_post',
     description:
       'Publica o programa un post en las redes sociales del cliente. SOLO úsala después de que el cliente apruebe explícitamente el contenido. Puede publicar inmediatamente o programar para una fecha futura.',
@@ -397,7 +478,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'URLs de imágenes o videos a incluir en el post (opcional)',
+            'URLs de imágenes o videos a incluir en el post (opcional). Usar las URLs devueltas por generate_image.',
         },
       },
       required: ['content', 'platforms'],
@@ -683,6 +764,23 @@ async function executeTool(
           platforms: input.platforms,
           tone: input.tone || 'professional',
           include_hashtags: input.include_hashtags !== false,
+        });
+        return JSON.stringify(result);
+      }
+
+      case 'generate_image': {
+        const input = toolInput as {
+          prompt: string;
+          model?: string;
+          aspect_ratio?: string;
+          num_outputs?: number;
+        };
+        // Llamada directa a replicate-client.ts
+        const result = await generateImage({
+          prompt: input.prompt,
+          model: (input.model as 'schnell' | 'pro') || 'schnell',
+          aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
+          num_outputs: input.num_outputs || 1,
         });
         return JSON.stringify(result);
       }
