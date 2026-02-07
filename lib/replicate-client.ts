@@ -115,7 +115,7 @@ export async function generateImage(
 
     // replicate.run() es sync por defecto (Prefer: wait, hasta 60s)
     // FLUX schnell genera en ~1-4 segundos
-    const output = await replicate.run(modelId, { input: replicateInput });
+    const output = await replicate.run(modelId as `${string}/${string}`, { input: replicateInput });
 
     // Output es un array de FileOutput objects
     // Extraer URLs de cada output
