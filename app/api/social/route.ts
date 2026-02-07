@@ -9,7 +9,7 @@ import {
   PR_TIMEZONE,
   LateApiError,
 } from '@/lib/late-client';
-import type { PublishRequest, LatePlatformTarget } from '@/lib/types';
+import type { PublishRequest, LatePlatformTarget, Platform } from '@/lib/types';
 
 // === POST /api/social — Publicar o programar un post ===
 export async function POST(request: NextRequest) {
@@ -195,8 +195,9 @@ async function handleConnect(body: {
     );
   }
 
+  // getConnectUrl ahora incluye redirect_url automaticamente
   const result = await getConnectUrl(
-    body.platform as LatePlatformTarget['platform'],
+    body.platform as Platform,
     body.profileId
   );
 

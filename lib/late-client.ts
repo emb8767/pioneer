@@ -19,6 +19,10 @@ function getApiKey(): string {
   return key;
 }
 
+function getAppUrl(): string {
+  return process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+}
+
 async function lateRequest<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -82,11 +86,29 @@ export async function listAccounts(): Promise<{ accounts: LateAccount[] }> {
   return lateRequest('/accounts');
 }
 
+/**
+ * Genera la URL de OAuth para conectar una cuenta de red social.
+ * 
+ * Standard mode (sin headless): Late.dev maneja la selección de página/org
+ * y redirige al callback con ?connected={platform}&profileId=X&username=Y
+ * 
+ * Headless mode: Late.dev redirige al callback con tokens temporales
+ * para que Pioneer construya su propia UI de selección.
+ */
 export async function getConnectUrl(
   platform: Platform,
-  profileId: string
+  profileId: string,
+  options?: { headless?: boolean }
 ): Promise<{ authUrl: string }> {
-  return lateRequest(`/connect/${platform}?profileId=${profileId}`);
+  const callbackUrl = `${getAppUrl()}/api/social/callback`;
+  
+  let endpoint = `/connect/${platform}?profileId=${profileId}&redirect_url=${encodeURIComponent(callbackUrl)}`;
+  
+  if (options?.headless) {
+    endpoint += '&headless=true';
+  }
+  
+  return lateRequest(endpoint);
 }
 
 // Bluesky usa App Password en vez de OAuth
@@ -95,7 +117,7 @@ export async function connectBluesky(
   handle: string,
   appPassword: string
 ): Promise<LateAccount> {
-  return lateRequest('/connect/bluesky', {
+  return lateRequest('/connect/bluesky/credentials', {
     method: 'POST',
     body: JSON.stringify({ profileId, handle, appPassword }),
   });
