@@ -35,7 +35,26 @@ function getCurrentDateForPrompt(): string {
   });
 }
 
-// === SYSTEM PROMPT OPTIMIZADO v2 ===
+// === DETECCIÓN DE ALUCINACIÓN DE PUBLICACIÓN ===
+// Detecta si Claude dice que publicó pero no llamó publish_post
+const PUBLISH_HALLUCINATION_PATTERNS = [
+  /publicado exitosamente/i,
+  /publicado con éxito/i,
+  /publicación exitosa/i,
+  /✅.*publicado/i,
+  /post publicado/i,
+  /se ha publicado/i,
+  /fue publicado/i,
+  /publicamos exitosamente/i,
+  /published successfully/i,
+];
+
+function detectPublishHallucination(text: string, publishPostCount: number): boolean {
+  if (publishPostCount > 0) return false; // publish_post was actually called
+  return PUBLISH_HALLUCINATION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// === SYSTEM PROMPT OPTIMIZADO v3 ===
 function buildSystemPrompt(): string {
   const fechaActual = getCurrentDateForPrompt();
 
@@ -90,9 +109,20 @@ Horarios óptimos PR (America/Puerto_Rico, UTC-4):
 - Lun-Vie: 12:00 PM o 7:00 PM
 - Sáb-Dom: 10:00 AM o 1:00 PM
 
-=== EJECUCIÓN — UN POST A LA VEZ ===
+=== REGLA CRÍTICA DE PUBLICACIÓN ===
 
-Esta es la regla más importante de ejecución:
+⚠️ PROHIBICIÓN ABSOLUTA: NUNCA digas "publicado exitosamente" o confirmes una publicación sin haber llamado la tool publish_post.
+
+Para publicar un post, DEBES seguir estos pasos EN ORDEN:
+1. Llamar la tool publish_post con el contenido y plataformas
+2. Esperar el resultado de la tool
+3. SOLO si el resultado dice success:true, confirmar al cliente
+
+Si el cliente dice "sí" o "publícalo", tu ÚNICA respuesta válida es LLAMAR la tool publish_post. NO generes texto de confirmación sin llamar la tool primero.
+
+Esto aplica igual para "programado". No confirmes programación sin llamar publish_post.
+
+=== EJECUCIÓN — UN POST A LA VEZ ===
 
 Cuando un plan es aprobado, ejecuta UN POST a la vez siguiendo este flujo exacto:
 
@@ -101,15 +131,17 @@ PASO 2: Generar texto del post (generate_content)
 PASO 3: Mostrar texto al cliente y preguntar: "¿Desea acompañar este post con una imagen AI ($0.015) o publicar solo con texto?"
 PASO 4: Si quiere imagen → llamar generate_image → mostrar URL de la imagen al cliente
 PASO 5: Pedir aprobación explícita del post completo (texto + imagen si la hay)
-PASO 6: Solo con aprobación explícita → llamar publish_post
-PASO 7: Confirmar publicación → preguntar: "¿Continuamos con el siguiente post del plan?"
+PASO 6: Solo con aprobación explícita → LLAMAR publish_post (NO generar confirmación sin llamar la tool)
+PASO 7: Confirmar publicación basándote en el resultado REAL de publish_post → preguntar: "¿Continuamos con el siguiente post del plan?"
 
 Cada post requiere su propia aprobación. El cliente responde entre cada post.
 Si el plan tiene posts para días futuros, usar scheduled_for con la fecha del plan.
 Solo puedes publicar 1 post por mensaje. Para el siguiente post, espera un nuevo mensaje del cliente.
 
-Frases que cuentan como aprobación: "Sí, publícalo", "Aprobado", "Dale, publica", "Perfecto, adelante"
+Frases que cuentan como aprobación: "Sí, publícalo", "Aprobado", "Dale, publica", "Perfecto, adelante", "si"
 Frases ambiguas ("Se ve bien", "Ok", "Interesante") → preguntar: "¿Desea que publique este contenido?"
+
+Cuando el cliente aprueba, tu respuesta DEBE incluir un tool_use block para publish_post. NO respondas solo con texto.
 
 === TOOLS ===
 
@@ -119,7 +151,7 @@ Tienes 5 herramientas:
 2. **generate_connect_url** — Generar enlace OAuth para conectar red social.
 3. **generate_content** — Generar texto de post por plataforma. Usar después de aprobación del plan.
 4. **generate_image** — Generar imagen AI (FLUX). Prompt en INGLÉS. Devuelve URL real (https://replicate.delivery/...). Incluir "no text overlay" en prompt.
-5. **publish_post** — Publicar o programar post. Solo después de aprobación explícita.
+5. **publish_post** — Publicar o programar post. DEBES llamar esta tool para publicar. NUNCA confirmes publicación sin haberla llamado.
 
 Sobre imágenes:
 - Para incluir imagen en un post, PRIMERO llamar generate_image para obtener URL real
@@ -137,7 +169,7 @@ Reglas: español estilo PR, emojis moderados (1-3), adaptar al límite de cada p
 
 === CONFIRMACIÓN DE PUBLICACIÓN ===
 
-Después de publicar, confirmar:
+SOLO después de recibir resultado exitoso de publish_post, confirmar:
 ✅ Publicado exitosamente
 - Plataforma: [nombre]
 - Estado: Publicado / Programado para [fecha]
@@ -315,7 +347,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'publish_post',
     description:
-      'Publica o programa un post en las redes sociales del cliente. SOLO úsala después de que el cliente apruebe explícitamente el contenido. Puede publicar inmediatamente o programar para una fecha futura. Si incluyes media_urls, SOLO usa URLs reales obtenidas de generate_image. Solo puedes publicar 1 post por mensaje.',
+      'Publica o programa un post en las redes sociales del cliente. OBLIGATORIO llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Puede publicar inmediatamente o programar para una fecha futura. Si incluyes media_urls, SOLO usa URLs reales obtenidas de generate_image.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -827,6 +859,7 @@ export async function POST(request: NextRequest) {
     // === TRACKING ===
     let generateImageWasCalled = false;
     let publishPostCount = 0;
+    let hallucinationRetryUsed = false;
 
     // Generar system prompt con fecha actual
     const systemPrompt = buildSystemPrompt();
@@ -848,10 +881,34 @@ export async function POST(request: NextRequest) {
         finalTextParts.push(...textBlocks.map((b) => b.text));
       }
 
-      // Si Claude terminó, devolver respuesta
+      // Si Claude terminó, verificar antes de devolver
       if (response.stop_reason === 'end_turn') {
+        const fullText = finalTextParts.join('\n\n');
+
+        // === DETECCIÓN DE ALUCINACIÓN DE PUBLICACIÓN ===
+        if (detectPublishHallucination(fullText, publishPostCount) && !hallucinationRetryUsed) {
+          console.warn('[Pioneer] ⚠️ ALUCINACIÓN DETECTADA: Claude dijo "publicado" sin llamar publish_post. Forzando retry.');
+          hallucinationRetryUsed = true;
+
+          // Agregar la respuesta de Claude y un mensaje correctivo del sistema
+          currentMessages = [
+            ...currentMessages,
+            { role: 'assistant' as const, content: response.content },
+            {
+              role: 'user' as const,
+              content: 'ERROR DEL SISTEMA: No se ejecutó la publicación. Debes llamar la tool publish_post para publicar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.',
+            },
+          ];
+
+          // Reset text parts since we're retrying
+          finalTextParts = [];
+
+          // Continue the loop — this will make another Claude API call
+          continue;
+        }
+
         return NextResponse.json({
-          message: finalTextParts.join('\n\n'),
+          message: fullText,
           usage: response.usage,
         });
       }
