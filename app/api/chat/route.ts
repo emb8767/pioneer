@@ -11,8 +11,9 @@ import {
   createPost,
   getNextOptimalTime,
   PR_TIMEZONE,
+  LateApiError,
 } from '@/lib/late-client';
-import { generateContent } from '@/lib/content-generator';
+import { generateContent, PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
 import type { Platform, LatePlatformTarget } from '@/lib/types';
 
 // Inicializar cliente de Anthropic
@@ -417,6 +418,215 @@ function stripMarkdown(text: string): string {
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // [link](url) → link text
 }
 
+// === VALIDACIÓN PREVENTIVA PARA PUBLISH_POST ===
+// Sección 13, Nivel 1 del Knowledge Doc
+// Verifica account_ids, auto-corrige si es necesario, valida contenido
+
+interface ValidatedPublishData {
+  content: string;
+  platforms: LatePlatformTarget[];
+  publishNow?: boolean;
+  scheduledFor?: string;
+  timezone?: string;
+  mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
+}
+
+interface ValidationResult {
+  success: boolean;
+  data?: ValidatedPublishData;
+  error?: string;
+  corrections?: string[]; // Log de correcciones silenciosas
+}
+
+async function validateAndPreparePublish(
+  input: {
+    content: string;
+    platforms: Array<{ platform: string; account_id: string }>;
+    publish_now?: boolean;
+    scheduled_for?: string;
+    timezone?: string;
+    media_urls?: string[];
+  }
+): Promise<ValidationResult> {
+  const corrections: string[] = [];
+
+  // --- 1. Limpiar markdown del contenido ---
+  const cleanContent = stripMarkdown(input.content);
+
+  // --- 2. Obtener cuentas reales de Late.dev ---
+  let realAccounts: Array<{ _id: string; platform: string; username?: string }>;
+  try {
+    const accountsResult = await listAccounts();
+    realAccounts = accountsResult.accounts;
+  } catch (error) {
+    return {
+      success: false,
+      error: `No se pudieron verificar las cuentas conectadas: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+    };
+  }
+
+  if (realAccounts.length === 0) {
+    return {
+      success: false,
+      error: 'No hay cuentas de redes sociales conectadas. El cliente debe conectar al menos una cuenta antes de publicar.',
+    };
+  }
+
+  // --- 3. Validar y auto-corregir cada account_id ---
+  const validatedPlatforms: LatePlatformTarget[] = [];
+
+  for (const requested of input.platforms) {
+    const platform = requested.platform as Platform;
+
+    // Buscar si el account_id enviado por Claude existe
+    const exactMatch = realAccounts.find(
+      (acc) => acc._id === requested.account_id && acc.platform === platform
+    );
+
+    if (exactMatch) {
+      // account_id correcto — usar tal cual
+      validatedPlatforms.push({
+        platform,
+        accountId: exactMatch._id,
+      });
+      continue;
+    }
+
+    // account_id incorrecto — buscar el correcto por plataforma
+    const platformMatch = realAccounts.find(
+      (acc) => acc.platform === platform
+    );
+
+    if (platformMatch) {
+      // Encontró una cuenta para esa plataforma — auto-corregir
+      corrections.push(
+        `account_id para ${platform} corregido: ${requested.account_id} → ${platformMatch._id} (${platformMatch.username || 'sin username'})`
+      );
+      validatedPlatforms.push({
+        platform,
+        accountId: platformMatch._id,
+      });
+      continue;
+    }
+
+    // No hay cuenta para esa plataforma — no se puede publicar ahí
+    corrections.push(
+      `No hay cuenta conectada para ${platform} — omitida de la publicación`
+    );
+  }
+
+  if (validatedPlatforms.length === 0) {
+    return {
+      success: false,
+      error: 'Ninguna de las plataformas solicitadas tiene una cuenta conectada. El cliente debe conectar sus redes sociales primero.',
+      corrections,
+    };
+  }
+
+  // --- 4. Validar límite de caracteres por plataforma ---
+  for (const vp of validatedPlatforms) {
+    const charLimit = PLATFORM_CHAR_LIMITS[vp.platform];
+    if (charLimit && cleanContent.length > charLimit) {
+      corrections.push(
+        `Contenido excede límite de ${vp.platform} (${cleanContent.length}/${charLimit} chars) — truncado`
+      );
+    }
+  }
+
+  // Truncar contenido si excede el límite más restrictivo de las plataformas seleccionadas
+  let finalContent = cleanContent;
+  const minCharLimit = Math.min(
+    ...validatedPlatforms.map((vp) => PLATFORM_CHAR_LIMITS[vp.platform] || Infinity)
+  );
+  if (finalContent.length > minCharLimit) {
+    finalContent = finalContent.substring(0, minCharLimit - 3) + '...';
+  }
+
+  // --- 5. Construir datos de publicación ---
+  const publishData: ValidatedPublishData = {
+    content: finalContent,
+    platforms: validatedPlatforms,
+  };
+
+  if (input.publish_now) {
+    publishData.publishNow = true;
+  } else if (input.scheduled_for) {
+    publishData.scheduledFor = input.scheduled_for;
+    publishData.timezone = input.timezone || PR_TIMEZONE;
+  } else {
+    // Si no especifica, programar para el próximo horario óptimo
+    publishData.scheduledFor = getNextOptimalTime();
+    publishData.timezone = PR_TIMEZONE;
+  }
+
+  if (input.media_urls?.length) {
+    publishData.mediaItems = input.media_urls.map((url) => ({
+      type: (url.match(/\.(mp4|mov|avi|webm)$/i) ? 'video' : 'image') as 'image' | 'video',
+      url,
+    }));
+  }
+
+  return {
+    success: true,
+    data: publishData,
+    corrections,
+  };
+}
+
+// === RETRY INTELIGENTE ===
+// Sección 13, Nivel 2 del Knowledge Doc
+// 1 retry automático solo para errores transitorios
+// Cada retry cuenta como 1 post en Late.dev (plan Free = 20/mes)
+
+function isTransientError(error: unknown): boolean {
+  if (error instanceof LateApiError) {
+    // HTTP 500+ sin mensaje claro = transitorio
+    if (error.status >= 500) {
+      // Si el body tiene un mensaje claro de error, NO es transitorio
+      const clearErrors = ['invalid', 'not found', 'unauthorized', 'forbidden'];
+      const bodyLower = error.body.toLowerCase();
+      return !clearErrors.some((msg) => bodyLower.includes(msg));
+    }
+    // HTTP 429 (rate limit) = transitorio, vale la pena reintentar
+    if (error.status === 429) return true;
+    // Cualquier otro código HTTP (400, 401, 403, 404) = NO transitorio
+    return false;
+  }
+  // Errores de red (fetch failed, timeout, etc.) = transitorio
+  if (error instanceof TypeError && error.message.includes('fetch')) return true;
+  // Error genérico sin información = transitorio (dar una oportunidad)
+  return false;
+}
+
+async function publishWithRetry(
+  data: ValidatedPublishData
+): Promise<{ message: string; post: unknown }> {
+  try {
+    return await createPost(data);
+  } catch (firstError) {
+    console.error('[Pioneer] Primer intento de publicación falló:', firstError);
+
+    if (!isTransientError(firstError)) {
+      // Error con causa clara — no reintentar, devolver el error
+      throw firstError;
+    }
+
+    // Error transitorio — reintentar 1 vez
+    console.log('[Pioneer] Error transitorio detectado. Reintentando (1/1)...');
+
+    // Esperar 2 segundos antes del retry (especialmente útil para rate limits)
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    try {
+      return await createPost(data);
+    } catch (retryError) {
+      console.error('[Pioneer] Retry falló:', retryError);
+      // Si el retry también falla, devolver el error del retry
+      throw retryError;
+    }
+  }
+}
+
 // === EJECUTAR TOOLS — LLAMADAS DIRECTAS (sin fetch HTTP) ===
 // FIX: En Vercel serverless, una función no puede llamarse a sí misma via HTTP.
 // Ahora importamos y llamamos las funciones directamente.
@@ -487,59 +697,61 @@ async function executeTool(
           media_urls?: string[];
         };
 
-        // Limpiar markdown del contenido — redes sociales no lo renderizan
-        const cleanContent = stripMarkdown(input.content);
+        // === NIVEL 1: VALIDACIÓN PREVENTIVA ===
+        // Verifica account_ids, auto-corrige, valida contenido
+        const validation = await validateAndPreparePublish(input);
 
-        // Construir el request para Late.dev via late-client.ts
-        const platforms: LatePlatformTarget[] = input.platforms.map((p) => ({
-          platform: p.platform as Platform,
-          accountId: p.account_id,
-        }));
-
-        const publishData: {
-          content: string;
-          platforms: LatePlatformTarget[];
-          publishNow?: boolean;
-          scheduledFor?: string;
-          timezone?: string;
-          mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
-        } = {
-          content: cleanContent,
-          platforms,
-        };
-
-        if (input.publish_now) {
-          publishData.publishNow = true;
-        } else if (input.scheduled_for) {
-          publishData.scheduledFor = input.scheduled_for;
-          publishData.timezone = input.timezone || PR_TIMEZONE;
-        } else {
-          // Si no especifica, programar para el próximo horario óptimo
-          publishData.scheduledFor = getNextOptimalTime();
-          publishData.timezone = PR_TIMEZONE;
+        if (!validation.success || !validation.data) {
+          return JSON.stringify({
+            success: false,
+            error: validation.error,
+            corrections: validation.corrections,
+          });
         }
 
-        if (input.media_urls?.length) {
-          publishData.mediaItems = input.media_urls.map((url) => ({
-            type: (url.match(/\.(mp4|mov|avi|webm)$/i) ? 'video' : 'image') as 'image' | 'video',
-            url,
-          }));
+        // Log correcciones silenciosas (el cliente no las ve)
+        if (validation.corrections && validation.corrections.length > 0) {
+          console.log('[Pioneer] Correcciones preventivas:', validation.corrections);
         }
 
-        // Llamada directa a late-client.ts
-        const result = await createPost(publishData);
+        // === NIVEL 2: PUBLICAR CON RETRY INTELIGENTE ===
+        // 1 retry automático solo para errores transitorios
+        try {
+          const result = await publishWithRetry(validation.data);
 
-        return JSON.stringify({
-          success: true,
-          message: input.publish_now
-            ? 'Post publicado exitosamente'
-            : `Post programado para ${publishData.scheduledFor}`,
-          post: result.post,
-          ...(publishData.scheduledFor && {
-            scheduledFor: publishData.scheduledFor,
-            timezone: publishData.timezone,
-          }),
-        });
+          return JSON.stringify({
+            success: true,
+            message: validation.data.publishNow
+              ? 'Post publicado exitosamente'
+              : `Post programado para ${validation.data.scheduledFor}`,
+            post: result.post,
+            ...(validation.data.scheduledFor && {
+              scheduledFor: validation.data.scheduledFor,
+              timezone: validation.data.timezone,
+            }),
+            // Incluir info sobre correcciones en el log (no visible al cliente)
+            ...(validation.corrections &&
+              validation.corrections.length > 0 && {
+                _corrections: validation.corrections,
+              }),
+          });
+        } catch (publishError) {
+          // Publicación falló incluso después del retry
+          console.error('[Pioneer] Publicación falló después de validación y retry:', publishError);
+
+          const errorMessage =
+            publishError instanceof LateApiError
+              ? `Error de Late.dev (HTTP ${publishError.status}): ${publishError.body}`
+              : publishError instanceof Error
+                ? publishError.message
+                : 'Error desconocido al publicar';
+
+          return JSON.stringify({
+            success: false,
+            error: errorMessage,
+            corrections: validation.corrections,
+          });
+        }
       }
 
       default:

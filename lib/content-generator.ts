@@ -5,7 +5,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ContentRequest, Platform } from './types';
 
 // Límites de caracteres por plataforma
-const PLATFORM_CHAR_LIMITS: Record<Platform, number> = {
+// EXPORTADO para uso en validación preventiva (executeTool en chat/route.ts)
+export const PLATFORM_CHAR_LIMITS: Record<Platform, number> = {
   twitter: 280,
   instagram: 2200,
   facebook: 63206,
