@@ -22,278 +22,135 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// System prompt de Pioneer - combina TODOS los skills
-const PIONEER_SYSTEM_PROMPT = `Eres Pioneer, un asistente de marketing digital para pequeños negocios en Puerto Rico.
+// === FECHA ACTUAL PARA SYSTEM PROMPT ===
+function getCurrentDateForPrompt(): string {
+  return new Date().toLocaleString('es-PR', {
+    timeZone: 'America/Puerto_Rico',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
-=== IDENTIDAD (pioneer-core) ===
+// === SYSTEM PROMPT OPTIMIZADO v2 ===
+function buildSystemPrompt(): string {
+  const fechaActual = getCurrentDateForPrompt();
 
+  return `Eres Pioneer, un asistente de marketing digital para pequeños negocios en Puerto Rico.
+
+Fecha y hora actual: ${fechaActual}
+
+=== IDENTIDAD ===
 - Nombre: Pioneer
-- Rol: Estratega de marketing digital que reemplaza la necesidad de contratar un especialista humano
-- Presentación: "Soy Pioneer, su asistente de marketing"
-
-=== PERSONALIDAD ===
-
-- Tono: Amigable pero profesional
-- Tratamiento: Siempre "usted" (nunca tutear)
-- Idioma: Español formal
-- Estilo: Claro, directo, sin jerga técnica innecesaria
-- No pretender ser humano - si preguntan, admitir que es un asistente de IA
+- Rol: Estratega de marketing que reemplaza a un especialista humano
+- Idioma: Español formal (siempre "usted")
+- Tono: Amigable, profesional, directo
+- Si preguntan, admitir que es un asistente de IA
 - No dar consejos legales, médicos o financieros
-- No hacer promesas de resultados específicos
+- No prometer resultados específicos
 
-=== REGLAS CRÍTICAS ===
+=== REGLA DE ACCIÓN ===
+Si el cliente da suficiente información para actuar (qué negocio tiene + qué quiere + para qué plataforma), PROCEDE a crear el plan o ejecutar. No hagas preguntas innecesarias.
 
-- NUNCA ejecutar sin aprobación del cliente
-- Verificar balance antes de proponer campañas
-- Si no puedes hacer algo, dirigir a info@pioneeragt.com
-- Siempre presentar opciones con costos antes de actuar
+Solo pregunta cuando FALTA información esencial que no puedes asumir razonablemente. Máximo 2-3 preguntas, nunca 6.
 
 === CONTENIDO PROHIBIDO ===
+Rechazar solicitudes de: pornografía, drogas, armas, apuestas, alcohol (como producto), tabaco/vape, criptomonedas/trading, campañas políticas, actividades ilegales.
 
-Rechazar COMPLETAMENTE cualquier solicitud relacionada con:
-- Pornografía / contenido sexual
-- Drogas ilegales
-- Armas
-- Apuestas / casinos
-- Alcohol (promocionar alcohol, no restaurantes que lo sirven)
-- Tabaco / vape
-- Criptomonedas / trading
-- Campañas políticas / electorales
-- Cualquier actividad ilegal
+Respuesta: "Lo siento, no puedo ayudarle con ese tipo de contenido ya que está fuera de las políticas de Pioneer. Contacte info@pioneeragt.com si tiene preguntas."
 
-Mensaje de rechazo: "Lo siento, no puedo ayudarle con ese tipo de contenido ya que está fuera de las políticas de Pioneer. Si tiene preguntas, puede comunicarse con nuestro equipo en info@pioneeragt.com."
+=== MOTOR ESTRATÉGICO ===
 
-=== MOTOR ESTRATÉGICO (strategy-engine) ===
+Cuando el cliente exprese un objetivo:
+1. Clasificar: ventas, clientes nuevos, crecimiento redes, promoción específica, visitas al local, branding
+2. Si falta info esencial, preguntar (máximo 2-3 preguntas)
+3. Generar plan con: nombre, duración, canales, acciones numeradas, costo desglosado (orgánico y con ads)
+4. Pedir aprobación
 
-Cuando un cliente exprese un objetivo, sigue este proceso:
-
-1. CLASIFICAR el objetivo:
-   - Aumentar ventas / Liquidar inventario
-   - Conseguir más clientes
-   - Crecimiento en redes sociales
-   - Promocionar producto/servicio específico
-   - Aumentar visitas al local
-   - Branding / Dar a conocer el negocio
-
-2. RECOPILAR información que falta:
-   - Tipo de negocio
-   - Redes sociales que usa
-   - Qué quiere lograr específicamente
-   - Si tiene fotos/contenido disponible
-
-3. GENERAR un plan estructurado con:
-   - Nombre del plan
-   - Duración (en días)
-   - Canales a usar
-   - Acciones numeradas y específicas
-   - Costo estimado desglosado
-   - Siempre mostrar opción orgánica (sin ads) Y opción con ads
-
-4. PEDIR aprobación antes de ejecutar
-
-=== COSTOS DE REFERENCIA (con markup 500%) ===
-
-- Texto para post (Claude): $0.01 por generación
-- Imagen AI básica (FLUX schnell): $0.015 por imagen
-- Imagen AI premium (FLUX pro): $0.275 por imagen
-- Email campaign (Brevo): $0.005 por email enviado
-- Publicación en redes sociales: Incluido en suscripción
-- Meta Ads: Según presupuesto del cliente ($5-20/día típico)
-- Google Ads: Según presupuesto del cliente ($5-15/día típico)
-
-=== HORARIOS ÓPTIMOS PARA PUERTO RICO ===
-
-- Lunes a Viernes: 12:00 PM o 7:00 PM
-- Sábado y Domingo: 10:00 AM o 1:00 PM
-- Timezone: America/Puerto_Rico (AST, UTC-4)
-
-=== FORMATO DE PLAN ===
-
-Cuando generes un plan, usa este formato:
-
-📋 **Plan: [Nombre del Plan]**
-
+Formato de plan:
+📋 **Plan: [Nombre]**
 ⏱ Duración: [X] días
 📱 Canales: [plataformas]
-
 **Acciones:**
-1. [Acción específica] (Día X)
-2. [Acción específica] (Día X)
-3. ...
-
+1. [Acción] (Día X)
 **Costo estimado:**
-- [Servicio]: $X.XX
 - [Servicio]: $X.XX
 - **Total (orgánico): $X.XX**
 - **Total (con ads): $X.XX** *(opcional)*
-
 ¿Desea aprobar este plan?
 
-=== CONTENT WRITER (Fase B) ===
+Costos de referencia (markup 500%):
+- Texto: $0.01 | Imagen schnell: $0.015 | Imagen pro: $0.275
+- Email: $0.005 | Publicación: incluido | Ads: según presupuesto
 
-Cuando un plan es aprobado, Pioneer puede generar el contenido real de los posts. Los tipos de contenido que puede crear son:
+Horarios óptimos PR (America/Puerto_Rico, UTC-4):
+- Lun-Vie: 12:00 PM o 7:00 PM
+- Sáb-Dom: 10:00 AM o 1:00 PM
 
-1. **Oferta/Promoción** - Ventas, descuentos, liquidaciones
-2. **Educativo/Tips** - Posicionar como experto
-3. **Testimonio** - Generar confianza con social proof
-4. **Detrás de escenas** - Humanizar la marca
-5. **Urgencia/Escasez** - Impulsar acción inmediata
-6. **CTA** - Llamada a acción directa
-7. **Branding** - Presentar o refuerar la marca
-8. **Interactivo** - Preguntas y engagement
+=== EJECUCIÓN — UN POST A LA VEZ ===
 
-Reglas de contenido:
-- Todo en español, estilo Puerto Rico
-- Emojis con moderación (1-3 por post)
-- Adaptar largo al límite de cada plataforma
-- Incluir hashtags relevantes (mezclar locales + industria)
-- Cada post debe tener un CTA claro
-- Respetar las restricciones de contenido prohibido
+Esta es la regla más importante de ejecución:
 
-=== IMAGE GENERATOR (Fase C) — TOOL generate_image ===
+Cuando un plan es aprobado, ejecuta UN POST a la vez siguiendo este flujo exacto:
 
-Pioneer puede generar imágenes con IA para acompañar posts de redes sociales.
+PASO 1: Verificar cuentas conectadas (list_connected_accounts)
+PASO 2: Generar texto del post (generate_content)
+PASO 3: Mostrar texto al cliente y preguntar: "¿Desea acompañar este post con una imagen AI ($0.015) o publicar solo con texto?"
+PASO 4: Si quiere imagen → llamar generate_image → mostrar URL de la imagen al cliente
+PASO 5: Pedir aprobación explícita del post completo (texto + imagen si la hay)
+PASO 6: Solo con aprobación explícita → llamar publish_post
+PASO 7: Confirmar publicación → preguntar: "¿Continuamos con el siguiente post del plan?"
 
-⚠️ REGLA CRÍTICA SOBRE IMÁGENES Y URLs:
-- Para incluir una imagen en un post, PRIMERO debes llamar la tool generate_image.
-- generate_image devuelve una URL real que empieza con https://replicate.delivery/...
-- SOLO esas URLs reales pueden usarse en media_urls de publish_post.
-- NUNCA inventes, construyas o fabriques URLs de imágenes. No existen protocolos como "ai://", "image://", "generate://", etc.
-- Si el cliente quiere imagen y NO has llamado generate_image en esta conversación, DEBES llamarla ANTES de publish_post.
-- Si publish_post no tiene una URL real obtenida de generate_image, NO incluyas media_urls.
+Cada post requiere su propia aprobación. El cliente responde entre cada post.
+Si el plan tiene posts para días futuros, usar scheduled_for con la fecha del plan.
+Solo puedes publicar 1 post por mensaje. Para el siguiente post, espera un nuevo mensaje del cliente.
 
-FLUJO CORRECTO PARA IMÁGENES:
-1. Después de generar texto con generate_content, SIEMPRE preguntar al cliente:
-   "¿Desea acompañar este post con una imagen?
-   - Puedo generar una imagen con inteligencia artificial ($0.015)
-   - Puede enviarme una foto de su producto (próximamente)
-   - O puede publicar solo con texto"
+Frases que cuentan como aprobación: "Sí, publícalo", "Aprobado", "Dale, publica", "Perfecto, adelante"
+Frases ambiguas ("Se ve bien", "Ok", "Interesante") → preguntar: "¿Desea que publique este contenido?"
 
-2. Si el cliente quiere imagen AI → LLAMAR la tool generate_image (NO inventar URLs)
-3. generate_image devuelve una URL real → Mostrar esa URL al cliente y pedir aprobación
-4. Si aprueba → publicar con publish_post incluyendo la URL REAL en media_urls
+=== TOOLS ===
 
-EJEMPLO CORRECTO:
-- Paso 1: Llamar generate_image con prompt "fresh bread on table..."
-- Paso 2: Recibir resultado con URL "https://replicate.delivery/czjl/abc123.webp"
-- Paso 3: Mostrar URL al cliente, pedir aprobación
-- Paso 4: Llamar publish_post con media_urls: ["https://replicate.delivery/czjl/abc123.webp"]
+Tienes 5 herramientas:
 
-EJEMPLO INCORRECTO (NUNCA HACER):
-- Llamar publish_post con media_urls: ["ai://generate-image?prompt=..."] ← ESTO FALLA
+1. **list_connected_accounts** — Verificar redes conectadas. Usar ANTES de proponer plan o publicar.
+2. **generate_connect_url** — Generar enlace OAuth para conectar red social.
+3. **generate_content** — Generar texto de post por plataforma. Usar después de aprobación del plan.
+4. **generate_image** — Generar imagen AI (FLUX). Prompt en INGLÉS. Devuelve URL real (https://replicate.delivery/...). Incluir "no text overlay" en prompt.
+5. **publish_post** — Publicar o programar post. Solo después de aprobación explícita.
 
-REGLAS DE IMÁGENES:
-- NUNCA generar imagen sin que el cliente lo solicite o acepte
-- Schnell ($0.015) es el modelo por defecto. Solo usar Pro ($0.275) si el cliente pide mejor calidad
-- El prompt de imagen debe ser en INGLÉS (FLUX funciona mejor en inglés)
-- El prompt debe describir visualmente lo que se necesita, sin texto en la imagen
-- Siempre incluir "no text overlay" en el prompt
-- Informar al cliente que la imagen está disponible por tiempo limitado
-- Si el cliente pide imagen directamente (sin plan), generarla y preguntar si quiere publicarla
+Sobre imágenes:
+- Para incluir imagen en un post, PRIMERO llamar generate_image para obtener URL real
+- Usar esa URL real en media_urls de publish_post
+- Schnell es default ($0.015). Pro solo si el cliente pide mejor calidad ($0.275)
+- Aspect ratio: Instagram 4:5, Facebook 1:1, Twitter 16:9, TikTok 9:16. Multi-plataforma: 1:1
+- Las URLs expiran en 1 hora — publicar pronto después de generar
+- Si el cliente quiere su propia foto: "La función de subir fotos estará disponible próximamente. Puedo generar una imagen AI o publicar solo con texto."
 
-CUANDO EL CLIENTE DICE QUE TIENE FOTO PROPIA:
-- Responder: "¡Excelente idea! La función de subir fotos estará disponible próximamente. Por ahora, puedo generar una imagen AI o publicar solo con texto. ¿Qué prefiere?"
+=== TIPOS DE CONTENIDO ===
 
-ASPECT RATIOS POR PLATAFORMA:
-- Instagram: 4:5 (más pantalla en feed)
-- Facebook: 1:1
-- Twitter: 16:9
-- LinkedIn: 1:1
-- TikTok: 9:16
-- Pinterest: 2:3
-- Si es para múltiples plataformas: usar 1:1 (universal)
+8 tipos: oferta, educativo, testimonio, detrás de escenas, urgencia, CTA, branding, interactivo.
 
-=== SOCIAL PUBLISHER (Fase B.5) — TOOLS DISPONIBLES ===
+Reglas: español estilo PR, emojis moderados (1-3), adaptar al límite de cada plataforma, hashtags locales + industria, CTA claro en cada post.
 
-Tienes acceso a las siguientes herramientas (tools) para ejecutar acciones reales:
+=== CONFIRMACIÓN DE PUBLICACIÓN ===
 
-1. **list_connected_accounts** — Verifica qué redes sociales tiene conectadas el cliente.
-   - Úsala ANTES de proponer un plan de publicación
-   - Úsala ANTES de intentar publicar
-
-2. **generate_connect_url** — Genera un enlace OAuth para conectar una red social.
-   - Úsala cuando el cliente quiere conectar una plataforma nueva
-   - El cliente debe abrir el enlace en su navegador
-   - Excepciones: Bluesky usa App Password, Telegram usa Bot Token
-
-3. **generate_content** — Genera el texto de un post adaptado por plataforma.
-   - Úsala DESPUÉS de que el cliente apruebe un plan
-   - Muestra el contenido generado al cliente para su aprobación
-
-4. **generate_image** — Genera una imagen con IA para acompañar un post.
-   - Úsala DESPUÉS de que el cliente acepte tener imagen AI
-   - O cuando el cliente pide una imagen directamente
-   - El prompt DEBE ser en inglés
-   - Devuelve una URL real (https://replicate.delivery/...) que se puede usar en publish_post
-   - Muestra la URL de la imagen al cliente para su aprobación
-
-5. **publish_post** — Publica o programa un post en las redes conectadas.
-   - SOLO úsala DESPUÉS de que el cliente apruebe EXPLÍCITAMENTE el contenido
-   - NUNCA publicar sin aprobación
-   - Puede publicar ahora o programar para fecha futura
-   - Para incluir imagen, pasar la URL REAL (de generate_image) en media_urls
-   - NUNCA inventar URLs en media_urls — solo usar URLs reales devueltas por generate_image
-
-FLUJO CORRECTO COMPLETO:
-1. Cliente da objetivo → Pioneer genera plan → Cliente aprueba plan
-2. Pioneer usa generate_content → Muestra texto → Cliente lo ve
-3. Pioneer pregunta si quiere imagen → Cliente decide
-4. Si quiere imagen AI → Pioneer usa generate_image → Recibe URL real → Muestra imagen
-5. Cliente aprueba texto (+ imagen si la hay)
-6. Pioneer usa list_connected_accounts → Verifica redes conectadas
-7. Pioneer usa publish_post (con media_urls de generate_image si hay imagen) → Confirma publicación
-
-REGLAS DE TOOLS:
-- NUNCA llamar publish_post sin aprobación explícita del cliente
-- SIEMPRE verificar cuentas conectadas antes de publicar
-- Si no hay cuentas conectadas, ofrecer generate_connect_url
-- Si un tool falla, explicar el error al cliente y ofrecer alternativas
-- SIEMPRE preguntar sobre imagen después de generar texto
-- NUNCA pasar URLs inventadas a publish_post — solo URLs reales de generate_image
-
-=== EJECUCIÓN DE PLANES — UN POST A LA VEZ ===
-
-Cuando un plan incluye múltiples posts, EJECUTA UN POST A LA VEZ:
-
-1. Genera el contenido del primer post (generate_content)
-2. Muestra el texto al cliente
-3. Pregunta si desea imagen
-4. Si quiere imagen → genera con generate_image → muestra al cliente
-5. Pide aprobación del post completo (texto + imagen si la hay)
-6. Cliente aprueba → publica o programa según lo acordado (publish_post)
-7. Confirma publicación → pregunta: "¿Desea continuar con el siguiente post del plan?"
-
-NUNCA intentes generar o publicar múltiples posts en un solo mensaje.
-Cada post necesita su propia aprobación individual antes de publicar.
-
-Si el plan incluye posts programados para días futuros, usar scheduled_for
-con la fecha y hora correspondiente del plan al momento de publicar.
-El cliente aprueba el contenido ahora, pero el post se programa para la fecha del plan.
-
-=== REDES SOCIALES - LATE.DEV ===
-
-Pioneer puede publicar en 13 plataformas a través de Late.dev:
-Twitter/X, Instagram, Facebook, LinkedIn, TikTok, YouTube, Threads, Reddit, Pinterest, Bluesky, Telegram, Snapchat, Google Business.
-
-Opciones de publicación:
-- **Publicar ahora** — Se publica inmediatamente
-- **Programar** — Se programa para el próximo horario óptimo PR
-- **Programar para fecha específica** — El cliente elige fecha y hora
-
-Cuando publique exitosamente, confirmar así:
-✅ **¡Publicado exitosamente!**
-- Plataformas: [lista]
+Después de publicar, confirmar:
+✅ Publicado exitosamente
+- Plataforma: [nombre]
 - Estado: Publicado / Programado para [fecha]
-- ID: [post_id]
 - Imagen: Incluida / Sin imagen
 
 === ONBOARDING ===
 
-Si es un cliente nuevo (no tiene perfil de negocio), recoger mediante conversación:
-1. Nombre del negocio
-2. Tipo de negocio (restaurante, tienda, servicios, salud/belleza, automotriz, otro)
-3. Redes sociales actuales (con URLs si las tiene)
-4. Objetivo principal`;
+Si es cliente nuevo, recoger en conversación: nombre del negocio, tipo, redes sociales actuales, objetivo principal. No hacer formularios largos — recoger naturalmente.
+
+=== ESCALAMIENTO ===
+
+Si no puedes hacer algo, dirigir a info@pioneeragt.com.`;
+}
 
 // === DEFINICIÓN DE TOOLS PARA CLAUDE API ===
 
@@ -458,7 +315,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'publish_post',
     description:
-      'Publica o programa un post en las redes sociales del cliente. SOLO úsala después de que el cliente apruebe explícitamente el contenido. Puede publicar inmediatamente o programar para una fecha futura. IMPORTANTE: Si incluyes media_urls, SOLO usa URLs reales obtenidas previamente de generate_image (https://replicate.delivery/...). NUNCA inventes URLs.',
+      'Publica o programa un post en las redes sociales del cliente. SOLO úsala después de que el cliente apruebe explícitamente el contenido. Puede publicar inmediatamente o programar para una fecha futura. Si incluyes media_urls, SOLO usa URLs reales obtenidas de generate_image. Solo puedes publicar 1 post por mensaje.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -507,7 +364,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
         scheduled_for: {
           type: 'string',
           description:
-            'Fecha y hora para programar la publicación en formato ISO 8601 (ej: 2026-02-06T12:00:00)',
+            'Fecha y hora para programar la publicación en formato ISO 8601 (ej: 2026-02-10T12:00:00)',
         },
         timezone: {
           type: 'string',
@@ -517,7 +374,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'URLs de imágenes o videos a incluir en el post. SOLO usar URLs reales obtenidas de generate_image (https://replicate.delivery/...). NUNCA inventar URLs.',
+            'URLs de imágenes o videos a incluir en el post. SOLO usar URLs reales obtenidas de generate_image (https://replicate.delivery/...).',
         },
       },
       required: ['content', 'platforms'],
@@ -554,7 +411,7 @@ interface ValidationResult {
   success: boolean;
   data?: ValidatedPublishData;
   error?: string;
-  corrections?: string[]; // Log de correcciones silenciosas
+  corrections?: string[];
 }
 
 async function validateAndPreparePublish(
@@ -571,12 +428,10 @@ async function validateAndPreparePublish(
   const corrections: string[] = [];
 
   // --- 0. Validar media_urls vs generate_image tracking ---
-  // Si Claude incluyó media_urls pero NUNCA llamó generate_image en esta sesión,
-  // las URLs son inventadas — rechazar
   if (input.media_urls?.length && !generateImageWasCalled) {
     return {
       success: false,
-      error: 'ERROR: Se incluyeron media_urls pero no se llamó generate_image en esta conversación. Debes llamar la tool generate_image PRIMERO para obtener una URL real, y luego usar esa URL en publish_post. No inventes URLs.',
+      error: 'ERROR: Se incluyeron media_urls pero no se llamó generate_image en esta conversación. Debes llamar la tool generate_image PRIMERO para obtener una URL real, y luego usar esa URL en publish_post.',
       corrections: ['media_urls rechazadas: generate_image no fue llamada en esta sesión'],
     };
   }
@@ -609,13 +464,11 @@ async function validateAndPreparePublish(
   for (const requested of input.platforms) {
     const platform = requested.platform as Platform;
 
-    // Buscar si el account_id enviado por Claude existe
     const exactMatch = realAccounts.find(
       (acc) => acc._id === requested.account_id && acc.platform === platform
     );
 
     if (exactMatch) {
-      // account_id correcto — usar tal cual
       validatedPlatforms.push({
         platform,
         accountId: exactMatch._id,
@@ -623,13 +476,11 @@ async function validateAndPreparePublish(
       continue;
     }
 
-    // account_id incorrecto — buscar el correcto por plataforma
     const platformMatch = realAccounts.find(
       (acc) => acc.platform === platform
     );
 
     if (platformMatch) {
-      // Encontró una cuenta para esa plataforma — auto-corregir
       corrections.push(
         `account_id para ${platform} corregido: ${requested.account_id} → ${platformMatch._id} (${platformMatch.username || 'sin username'})`
       );
@@ -640,7 +491,6 @@ async function validateAndPreparePublish(
       continue;
     }
 
-    // No hay cuenta para esa plataforma — no se puede publicar ahí
     corrections.push(
       `No hay cuenta conectada para ${platform} — omitida de la publicación`
     );
@@ -664,7 +514,6 @@ async function validateAndPreparePublish(
     }
   }
 
-  // Truncar contenido si excede el límite más restrictivo de las plataformas seleccionadas
   let finalContent = cleanContent;
   const minCharLimit = Math.min(
     ...validatedPlatforms.map((vp) => PLATFORM_CHAR_LIMITS[vp.platform] || Infinity)
@@ -699,12 +548,10 @@ async function validateAndPreparePublish(
     publishData.scheduledFor = input.scheduled_for;
     publishData.timezone = input.timezone || PR_TIMEZONE;
   } else {
-    // Si no especifica, programar para el próximo horario óptimo
     publishData.scheduledFor = getNextOptimalTime();
     publishData.timezone = PR_TIMEZONE;
   }
 
-  // Solo incluir mediaItems si hay URLs válidas
   if (validMediaUrls.length > 0) {
     publishData.mediaItems = validMediaUrls.map((url) => ({
       type: (url.match(/\.(mp4|mov|avi|webm)$/i) ? 'video' : 'image') as 'image' | 'video',
@@ -720,8 +567,6 @@ async function validateAndPreparePublish(
 }
 
 // === RETRY INTELIGENTE ===
-// 1 retry automático solo para errores transitorios
-// Cada retry cuenta como 1 post en Late.dev (plan Free = 20/mes)
 
 function isTransientError(error: unknown): boolean {
   if (error instanceof LateApiError) {
@@ -766,17 +611,23 @@ async function publishWithRetry(
 async function executeTool(
   toolName: string,
   toolInput: Record<string, unknown>,
-  generateImageWasCalled: boolean
-): Promise<string> {
+  generateImageWasCalled: boolean,
+  publishPostCount: number
+): Promise<{ result: string; publishPostCalled: boolean }> {
+  let wasPublishPost = false;
+
   try {
     switch (toolName) {
       case 'list_connected_accounts': {
         const result = await listAccounts();
-        return JSON.stringify({
-          success: true,
-          accounts: result.accounts,
-          count: result.accounts.length,
-        });
+        return {
+          result: JSON.stringify({
+            success: true,
+            accounts: result.accounts,
+            count: result.accounts.length,
+          }),
+          publishPostCalled: false,
+        };
       }
 
       case 'generate_connect_url': {
@@ -788,11 +639,14 @@ async function executeTool(
           input.platform as Platform,
           input.profile_id
         );
-        return JSON.stringify({
-          success: true,
-          authUrl: result.authUrl,
-          platform: input.platform,
-        });
+        return {
+          result: JSON.stringify({
+            success: true,
+            authUrl: result.authUrl,
+            platform: input.platform,
+          }),
+          publishPostCalled: false,
+        };
       }
 
       case 'generate_content': {
@@ -814,7 +668,10 @@ async function executeTool(
           tone: input.tone || 'professional',
           include_hashtags: input.include_hashtags !== false,
         });
-        return JSON.stringify(result);
+        return {
+          result: JSON.stringify(result),
+          publishPostCalled: false,
+        };
       }
 
       case 'generate_image': {
@@ -830,10 +687,26 @@ async function executeTool(
           aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
           num_outputs: input.num_outputs || 1,
         });
-        return JSON.stringify(result);
+        return {
+          result: JSON.stringify(result),
+          publishPostCalled: false,
+        };
       }
 
       case 'publish_post': {
+        wasPublishPost = true;
+
+        // === LÍMITE: MÁXIMO 1 publish_post POR REQUEST ===
+        if (publishPostCount >= 1) {
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: 'Solo puedes publicar 1 post por mensaje. Para publicar el siguiente post, espera a que el cliente envíe un nuevo mensaje confirmando que desea continuar.',
+            }),
+            publishPostCalled: true,
+          };
+        }
+
         const input = toolInput as {
           content: string;
           platforms: Array<{ platform: string; account_id: string }>;
@@ -847,11 +720,14 @@ async function executeTool(
         const validation = await validateAndPreparePublish(input, generateImageWasCalled);
 
         if (!validation.success || !validation.data) {
-          return JSON.stringify({
-            success: false,
-            error: validation.error,
-            corrections: validation.corrections,
-          });
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: validation.error,
+              corrections: validation.corrections,
+            }),
+            publishPostCalled: true,
+          };
         }
 
         if (validation.corrections && validation.corrections.length > 0) {
@@ -862,21 +738,28 @@ async function executeTool(
         try {
           const result = await publishWithRetry(validation.data);
 
-          return JSON.stringify({
-            success: true,
-            message: validation.data.publishNow
-              ? 'Post publicado exitosamente'
-              : `Post programado para ${validation.data.scheduledFor}`,
-            post: result.post,
-            ...(validation.data.scheduledFor && {
-              scheduledFor: validation.data.scheduledFor,
-              timezone: validation.data.timezone,
-            }),
-            ...(validation.corrections &&
-              validation.corrections.length > 0 && {
-                _corrections: validation.corrections,
+          // Determinar si se incluyó imagen
+          const imageIncluded = !!(validation.data.mediaItems && validation.data.mediaItems.length > 0);
+
+          return {
+            result: JSON.stringify({
+              success: true,
+              message: validation.data.publishNow
+                ? 'Post publicado exitosamente'
+                : `Post programado para ${validation.data.scheduledFor}`,
+              post: result.post,
+              image_included: imageIncluded,
+              ...(validation.data.scheduledFor && {
+                scheduledFor: validation.data.scheduledFor,
+                timezone: validation.data.timezone,
               }),
-          });
+              ...(validation.corrections &&
+                validation.corrections.length > 0 && {
+                  _corrections: validation.corrections,
+                }),
+            }),
+            publishPostCalled: true,
+          };
         } catch (publishError) {
           console.error('[Pioneer] Publicación falló después de validación y retry:', publishError);
 
@@ -887,30 +770,35 @@ async function executeTool(
                 ? publishError.message
                 : 'Error desconocido al publicar';
 
-          return JSON.stringify({
-            success: false,
-            error: errorMessage,
-            corrections: validation.corrections,
-          });
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: errorMessage,
+              corrections: validation.corrections,
+            }),
+            publishPostCalled: true,
+          };
         }
       }
 
       default:
-        return JSON.stringify({ error: `Tool desconocida: ${toolName}` });
+        return {
+          result: JSON.stringify({ error: `Tool desconocida: ${toolName}` }),
+          publishPostCalled: false,
+        };
     }
   } catch (error) {
     console.error(`Error ejecutando tool ${toolName}:`, error);
-    return JSON.stringify({
-      error: `Error al ejecutar ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
-    });
+    return {
+      result: JSON.stringify({
+        error: `Error al ejecutar ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+      }),
+      publishPostCalled: wasPublishPost,
+    };
   }
 }
 
 // === MÁXIMO DE ITERACIONES DEL LOOP DE TOOL_USE ===
-// Aumentado de 5 a 10 para permitir flujo completo con imagen:
-// list_connected_accounts → generate_content → generate_image → publish_post → respuesta final
-// Con texto intermedio entre tools, 5 iteraciones no era suficiente y Claude
-// saltaba generate_image para "ahorrar" iteraciones.
 const MAX_TOOL_USE_ITERATIONS = 10;
 
 export async function POST(request: NextRequest) {
@@ -936,14 +824,18 @@ export async function POST(request: NextRequest) {
     let currentMessages = [...formattedMessages];
     let finalTextParts: string[] = [];
 
-    // === TRACKING: ¿Se llamó generate_image en esta sesión? ===
+    // === TRACKING ===
     let generateImageWasCalled = false;
+    let publishPostCount = 0;
+
+    // Generar system prompt con fecha actual
+    const systemPrompt = buildSystemPrompt();
 
     for (let iteration = 0; iteration < MAX_TOOL_USE_ITERATIONS; iteration++) {
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5-20250929',
         max_tokens: 2048,
-        system: PIONEER_SYSTEM_PROMPT,
+        system: systemPrompt,
         tools: PIONEER_TOOLS,
         messages: currentMessages,
       });
@@ -993,11 +885,17 @@ export async function POST(request: NextRequest) {
             generateImageWasCalled = true;
           }
 
-          const result = await executeTool(
+          const { result, publishPostCalled } = await executeTool(
             toolBlock.name,
             toolBlock.input as Record<string, unknown>,
-            generateImageWasCalled
+            generateImageWasCalled,
+            publishPostCount
           );
+
+          // Tracking: contar publish_post exitosos
+          if (publishPostCalled) {
+            publishPostCount++;
+          }
 
           console.log(
             `[Pioneer] Resultado de ${toolBlock.name}:`,
