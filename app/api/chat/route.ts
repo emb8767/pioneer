@@ -1,13 +1,24 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
+// === IMPORTS DIRECTOS (fix para Vercel serverless) ===
+// En vez de hacer fetch HTTP a /api/social y /api/content,
+// importamos las funciones directamente para evitar que una
+// función serverless se llame a sí misma via HTTP.
+import {
+  listAccounts,
+  getConnectUrl,
+  createPost,
+  getNextOptimalTime,
+  PR_TIMEZONE,
+} from '@/lib/late-client';
+import { generateContent } from '@/lib/content-generator';
+import type { Platform, LatePlatformTarget } from '@/lib/types';
+
 // Inicializar cliente de Anthropic
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
-
-// URL base de la app (para callbacks de OAuth)
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 // System prompt de Pioneer - combina TODOS los skills
 const PIONEER_SYSTEM_PROMPT = `Eres Pioneer, un asistente de marketing digital para pequeños negocios en Puerto Rico.
@@ -406,7 +417,9 @@ function stripMarkdown(text: string): string {
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // [link](url) → link text
 }
 
-// === EJECUTAR TOOLS ===
+// === EJECUTAR TOOLS — LLAMADAS DIRECTAS (sin fetch HTTP) ===
+// FIX: En Vercel serverless, una función no puede llamarse a sí misma via HTTP.
+// Ahora importamos y llamamos las funciones directamente.
 
 async function executeTool(
   toolName: string,
@@ -415,16 +428,13 @@ async function executeTool(
   try {
     switch (toolName) {
       case 'list_connected_accounts': {
-        const url = new URL(`${APP_URL}/api/social`);
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'list-accounts',
-          }),
+        // Llamada directa a late-client.ts
+        const result = await listAccounts();
+        return JSON.stringify({
+          success: true,
+          accounts: result.accounts,
+          count: result.accounts.length,
         });
-        const data = await response.json();
-        return JSON.stringify(data);
       }
 
       case 'generate_connect_url': {
@@ -432,17 +442,16 @@ async function executeTool(
           platform: string;
           profile_id: string;
         };
-        const response = await fetch(`${APP_URL}/api/social`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'connect',
-            platform: input.platform,
-            profileId: input.profile_id,
-          }),
+        // Llamada directa a late-client.ts
+        const result = await getConnectUrl(
+          input.platform as Platform,
+          input.profile_id
+        );
+        return JSON.stringify({
+          success: true,
+          authUrl: result.authUrl,
+          platform: input.platform,
         });
-        const data = await response.json();
-        return JSON.stringify(data);
       }
 
       case 'generate_content': {
@@ -455,21 +464,17 @@ async function executeTool(
           tone?: string;
           include_hashtags?: boolean;
         };
-        const response = await fetch(`${APP_URL}/api/content`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            business_name: input.business_name,
-            business_type: input.business_type,
-            post_type: input.post_type,
-            details: input.details,
-            platforms: input.platforms,
-            tone: input.tone || 'professional',
-            include_hashtags: input.include_hashtags !== false,
-          }),
+        // Llamada directa a content-generator.ts
+        const result = await generateContent({
+          business_name: input.business_name,
+          business_type: input.business_type,
+          post_type: input.post_type,
+          details: input.details,
+          platforms: input.platforms,
+          tone: input.tone || 'professional',
+          include_hashtags: input.include_hashtags !== false,
         });
-        const data = await response.json();
-        return JSON.stringify(data);
+        return JSON.stringify(result);
       }
 
       case 'publish_post': {
@@ -482,36 +487,59 @@ async function executeTool(
           media_urls?: string[];
         };
 
-        // Construir el body para Late.dev vía /api/social
         // Limpiar markdown del contenido — redes sociales no lo renderizan
         const cleanContent = stripMarkdown(input.content);
-        const publishBody: Record<string, unknown> = {
-          action: input.publish_now ? 'publish' : 'schedule',
+
+        // Construir el request para Late.dev via late-client.ts
+        const platforms: LatePlatformTarget[] = input.platforms.map((p) => ({
+          platform: p.platform as Platform,
+          accountId: p.account_id,
+        }));
+
+        const publishData: {
+          content: string;
+          platforms: LatePlatformTarget[];
+          publishNow?: boolean;
+          scheduledFor?: string;
+          timezone?: string;
+          mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
+        } = {
           content: cleanContent,
-          platforms: input.platforms.map((p) => ({
-            platform: p.platform,
-            accountId: p.account_id,
-          })),
+          platforms,
         };
 
-        if (input.scheduled_for) {
-          publishBody.scheduledFor = input.scheduled_for;
+        if (input.publish_now) {
+          publishData.publishNow = true;
+        } else if (input.scheduled_for) {
+          publishData.scheduledFor = input.scheduled_for;
+          publishData.timezone = input.timezone || PR_TIMEZONE;
+        } else {
+          // Si no especifica, programar para el próximo horario óptimo
+          publishData.scheduledFor = getNextOptimalTime();
+          publishData.timezone = PR_TIMEZONE;
         }
 
         if (input.media_urls?.length) {
-          publishBody.mediaItems = input.media_urls.map((url) => ({
-            type: url.match(/\.(mp4|mov|avi|webm)$/i) ? 'video' : 'image',
+          publishData.mediaItems = input.media_urls.map((url) => ({
+            type: (url.match(/\.(mp4|mov|avi|webm)$/i) ? 'video' : 'image') as 'image' | 'video',
             url,
           }));
         }
 
-        const response = await fetch(`${APP_URL}/api/social`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(publishBody),
+        // Llamada directa a late-client.ts
+        const result = await createPost(publishData);
+
+        return JSON.stringify({
+          success: true,
+          message: input.publish_now
+            ? 'Post publicado exitosamente'
+            : `Post programado para ${publishData.scheduledFor}`,
+          post: result.post,
+          ...(publishData.scheduledFor && {
+            scheduledFor: publishData.scheduledFor,
+            timezone: publishData.timezone,
+          }),
         });
-        const data = await response.json();
-        return JSON.stringify(data);
       }
 
       default:
