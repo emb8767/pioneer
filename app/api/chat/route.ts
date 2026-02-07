@@ -154,6 +154,14 @@ Reglas de contenido:
 
 Pioneer puede generar imágenes con IA para acompañar posts de redes sociales.
 
+⚠️ REGLA CRÍTICA SOBRE IMÁGENES Y URLs:
+- Para incluir una imagen en un post, PRIMERO debes llamar la tool generate_image.
+- generate_image devuelve una URL real que empieza con https://replicate.delivery/...
+- SOLO esas URLs reales pueden usarse en media_urls de publish_post.
+- NUNCA inventes, construyas o fabriques URLs de imágenes. No existen protocolos como "ai://", "image://", "generate://", etc.
+- Si el cliente quiere imagen y NO has llamado generate_image en esta conversación, DEBES llamarla ANTES de publish_post.
+- Si publish_post no tiene una URL real obtenida de generate_image, NO incluyas media_urls.
+
 FLUJO CORRECTO PARA IMÁGENES:
 1. Después de generar texto con generate_content, SIEMPRE preguntar al cliente:
    "¿Desea acompañar este post con una imagen?
@@ -161,9 +169,18 @@ FLUJO CORRECTO PARA IMÁGENES:
    - Puede enviarme una foto de su producto (próximamente)
    - O puede publicar solo con texto"
 
-2. Si el cliente quiere imagen AI → usar generate_image
-3. Mostrar la imagen al cliente (URL) y pedir aprobación
-4. Si aprueba → publicar con publish_post incluyendo la URL en media_urls
+2. Si el cliente quiere imagen AI → LLAMAR la tool generate_image (NO inventar URLs)
+3. generate_image devuelve una URL real → Mostrar esa URL al cliente y pedir aprobación
+4. Si aprueba → publicar con publish_post incluyendo la URL REAL en media_urls
+
+EJEMPLO CORRECTO:
+- Paso 1: Llamar generate_image con prompt "fresh bread on table..."
+- Paso 2: Recibir resultado con URL "https://replicate.delivery/czjl/abc123.webp"
+- Paso 3: Mostrar URL al cliente, pedir aprobación
+- Paso 4: Llamar publish_post con media_urls: ["https://replicate.delivery/czjl/abc123.webp"]
+
+EJEMPLO INCORRECTO (NUNCA HACER):
+- Llamar publish_post con media_urls: ["ai://generate-image?prompt=..."] ← ESTO FALLA
 
 REGLAS DE IMÁGENES:
 - NUNCA generar imagen sin que el cliente lo solicite o acepte
@@ -207,22 +224,24 @@ Tienes acceso a las siguientes herramientas (tools) para ejecutar acciones reale
    - Úsala DESPUÉS de que el cliente acepte tener imagen AI
    - O cuando el cliente pide una imagen directamente
    - El prompt DEBE ser en inglés
+   - Devuelve una URL real (https://replicate.delivery/...) que se puede usar en publish_post
    - Muestra la URL de la imagen al cliente para su aprobación
 
 5. **publish_post** — Publica o programa un post en las redes conectadas.
    - SOLO úsala DESPUÉS de que el cliente apruebe EXPLÍCITAMENTE el contenido
    - NUNCA publicar sin aprobación
    - Puede publicar ahora o programar para fecha futura
-   - Para incluir imagen, pasar la URL en media_urls
+   - Para incluir imagen, pasar la URL REAL (de generate_image) en media_urls
+   - NUNCA inventar URLs en media_urls — solo usar URLs reales devueltas por generate_image
 
 FLUJO CORRECTO COMPLETO:
 1. Cliente da objetivo → Pioneer genera plan → Cliente aprueba plan
 2. Pioneer usa generate_content → Muestra texto → Cliente lo ve
 3. Pioneer pregunta si quiere imagen → Cliente decide
-4. Si quiere imagen AI → Pioneer usa generate_image → Muestra imagen
+4. Si quiere imagen AI → Pioneer usa generate_image → Recibe URL real → Muestra imagen
 5. Cliente aprueba texto (+ imagen si la hay)
 6. Pioneer usa list_connected_accounts → Verifica redes conectadas
-7. Pioneer usa publish_post (con media_urls si hay imagen) → Confirma publicación
+7. Pioneer usa publish_post (con media_urls de generate_image si hay imagen) → Confirma publicación
 
 REGLAS DE TOOLS:
 - NUNCA llamar publish_post sin aprobación explícita del cliente
@@ -230,6 +249,7 @@ REGLAS DE TOOLS:
 - Si no hay cuentas conectadas, ofrecer generate_connect_url
 - Si un tool falla, explicar el error al cliente y ofrecer alternativas
 - SIEMPRE preguntar sobre imagen después de generar texto
+- NUNCA pasar URLs inventadas a publish_post — solo URLs reales de generate_image
 
 === REDES SOCIALES - LATE.DEV ===
 
@@ -387,7 +407,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_image',
     description:
-      'Genera una imagen con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Úsala cuando el cliente acepta tener una imagen AI, o cuando pide una imagen directamente. El prompt DEBE ser en inglés. Las URLs de imagen expiran en 1 hora — publicar pronto después de generar.',
+      'Genera una imagen con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Úsala cuando el cliente acepta tener una imagen AI, o cuando pide una imagen directamente. El prompt DEBE ser en inglés. Devuelve una URL real (https://replicate.delivery/...) que se puede usar en media_urls de publish_post. Las URLs expiran en 1 hora — publicar pronto después de generar.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -419,7 +439,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'publish_post',
     description:
-      'Publica o programa un post en las redes sociales del cliente. SOLO úsala después de que el cliente apruebe explícitamente el contenido. Puede publicar inmediatamente o programar para una fecha futura.',
+      'Publica o programa un post en las redes sociales del cliente. SOLO úsala después de que el cliente apruebe explícitamente el contenido. Puede publicar inmediatamente o programar para una fecha futura. IMPORTANTE: Si incluyes media_urls, SOLO usa URLs reales obtenidas previamente de generate_image (https://replicate.delivery/...). NUNCA inventes URLs.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -478,7 +498,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'URLs de imágenes o videos a incluir en el post (opcional). Usar las URLs devueltas por generate_image.',
+            'URLs de imágenes o videos a incluir en el post. SOLO usar URLs reales obtenidas de generate_image (https://replicate.delivery/...). NUNCA inventar URLs.',
         },
       },
       required: ['content', 'platforms'],
@@ -623,7 +643,23 @@ async function validateAndPreparePublish(
     finalContent = finalContent.substring(0, minCharLimit - 3) + '...';
   }
 
-  // --- 5. Construir datos de publicación ---
+  // --- 5. Validar media_urls — SOLO permitir http:// y https:// ---
+  // Fix: Claude a veces inventa URLs con protocolos falsos como "ai://", "image://", etc.
+  // Solo URLs reales de Replicate (https://replicate.delivery/...) son válidas.
+  let validMediaUrls: string[] = [];
+  if (input.media_urls?.length) {
+    for (const url of input.media_urls) {
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        validMediaUrls.push(url);
+      } else {
+        corrections.push(
+          `URL de media inválida descartada (protocolo no soportado): ${url.substring(0, 80)}...`
+        );
+      }
+    }
+  }
+
+  // --- 6. Construir datos de publicación ---
   const publishData: ValidatedPublishData = {
     content: finalContent,
     platforms: validatedPlatforms,
@@ -640,8 +676,9 @@ async function validateAndPreparePublish(
     publishData.timezone = PR_TIMEZONE;
   }
 
-  if (input.media_urls?.length) {
-    publishData.mediaItems = input.media_urls.map((url) => ({
+  // Solo incluir mediaItems si hay URLs válidas
+  if (validMediaUrls.length > 0) {
+    publishData.mediaItems = validMediaUrls.map((url) => ({
       type: (url.match(/\.(mp4|mov|avi|webm)$/i) ? 'video' : 'image') as 'image' | 'video',
       url,
     }));
@@ -796,7 +833,7 @@ async function executeTool(
         };
 
         // === NIVEL 1: VALIDACIÓN PREVENTIVA ===
-        // Verifica account_ids, auto-corrige, valida contenido
+        // Verifica account_ids, auto-corrige, valida contenido, filtra URLs inválidas
         const validation = await validateAndPreparePublish(input);
 
         if (!validation.success || !validation.data) {
