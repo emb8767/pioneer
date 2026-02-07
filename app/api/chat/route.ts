@@ -139,7 +139,7 @@ Cuando un plan es aprobado, Pioneer puede generar el contenido real de los posts
 4. **Detrás de escenas** - Humanizar la marca
 5. **Urgencia/Escasez** - Impulsar acción inmediata
 6. **CTA** - Llamada a acción directa
-7. **Branding** - Presentar o reforzar la marca
+7. **Branding** - Presentar o refuerar la marca
 8. **Interactivo** - Preguntas y engagement
 
 Reglas de contenido:
@@ -250,6 +250,25 @@ REGLAS DE TOOLS:
 - Si un tool falla, explicar el error al cliente y ofrecer alternativas
 - SIEMPRE preguntar sobre imagen después de generar texto
 - NUNCA pasar URLs inventadas a publish_post — solo URLs reales de generate_image
+
+=== EJECUCIÓN DE PLANES — UN POST A LA VEZ ===
+
+Cuando un plan incluye múltiples posts, EJECUTA UN POST A LA VEZ:
+
+1. Genera el contenido del primer post (generate_content)
+2. Muestra el texto al cliente
+3. Pregunta si desea imagen
+4. Si quiere imagen → genera con generate_image → muestra al cliente
+5. Pide aprobación del post completo (texto + imagen si la hay)
+6. Cliente aprueba → publica o programa según lo acordado (publish_post)
+7. Confirma publicación → pregunta: "¿Desea continuar con el siguiente post del plan?"
+
+NUNCA intentes generar o publicar múltiples posts en un solo mensaje.
+Cada post necesita su propia aprobación individual antes de publicar.
+
+Si el plan incluye posts programados para días futuros, usar scheduled_for
+con la fecha y hora correspondiente del plan al momento de publicar.
+El cliente aprueba el contenido ahora, pero el post se programa para la fecha del plan.
 
 === REDES SOCIALES - LATE.DEV ===
 
@@ -520,7 +539,6 @@ function stripMarkdown(text: string): string {
 }
 
 // === VALIDACIÓN PREVENTIVA PARA PUBLISH_POST ===
-// Sección 13, Nivel 1 del Knowledge Doc
 // Verifica account_ids, auto-corrige si es necesario, valida contenido
 
 interface ValidatedPublishData {
@@ -547,9 +565,21 @@ async function validateAndPreparePublish(
     scheduled_for?: string;
     timezone?: string;
     media_urls?: string[];
-  }
+  },
+  generateImageWasCalled: boolean
 ): Promise<ValidationResult> {
   const corrections: string[] = [];
+
+  // --- 0. Validar media_urls vs generate_image tracking ---
+  // Si Claude incluyó media_urls pero NUNCA llamó generate_image en esta sesión,
+  // las URLs son inventadas — rechazar
+  if (input.media_urls?.length && !generateImageWasCalled) {
+    return {
+      success: false,
+      error: 'ERROR: Se incluyeron media_urls pero no se llamó generate_image en esta conversación. Debes llamar la tool generate_image PRIMERO para obtener una URL real, y luego usar esa URL en publish_post. No inventes URLs.',
+      corrections: ['media_urls rechazadas: generate_image no fue llamada en esta sesión'],
+    };
+  }
 
   // --- 1. Limpiar markdown del contenido ---
   const cleanContent = stripMarkdown(input.content);
@@ -644,8 +674,6 @@ async function validateAndPreparePublish(
   }
 
   // --- 5. Validar media_urls — SOLO permitir http:// y https:// ---
-  // Fix: Claude a veces inventa URLs con protocolos falsos como "ai://", "image://", etc.
-  // Solo URLs reales de Replicate (https://replicate.delivery/...) son válidas.
   let validMediaUrls: string[] = [];
   if (input.media_urls?.length) {
     for (const url of input.media_urls) {
@@ -692,27 +720,20 @@ async function validateAndPreparePublish(
 }
 
 // === RETRY INTELIGENTE ===
-// Sección 13, Nivel 2 del Knowledge Doc
 // 1 retry automático solo para errores transitorios
 // Cada retry cuenta como 1 post en Late.dev (plan Free = 20/mes)
 
 function isTransientError(error: unknown): boolean {
   if (error instanceof LateApiError) {
-    // HTTP 500+ sin mensaje claro = transitorio
     if (error.status >= 500) {
-      // Si el body tiene un mensaje claro de error, NO es transitorio
       const clearErrors = ['invalid', 'not found', 'unauthorized', 'forbidden'];
       const bodyLower = error.body.toLowerCase();
       return !clearErrors.some((msg) => bodyLower.includes(msg));
     }
-    // HTTP 429 (rate limit) = transitorio, vale la pena reintentar
     if (error.status === 429) return true;
-    // Cualquier otro código HTTP (400, 401, 403, 404) = NO transitorio
     return false;
   }
-  // Errores de red (fetch failed, timeout, etc.) = transitorio
   if (error instanceof TypeError && error.message.includes('fetch')) return true;
-  // Error genérico sin información = transitorio (dar una oportunidad)
   return false;
 }
 
@@ -725,38 +746,31 @@ async function publishWithRetry(
     console.error('[Pioneer] Primer intento de publicación falló:', firstError);
 
     if (!isTransientError(firstError)) {
-      // Error con causa clara — no reintentar, devolver el error
       throw firstError;
     }
 
-    // Error transitorio — reintentar 1 vez
     console.log('[Pioneer] Error transitorio detectado. Reintentando (1/1)...');
-
-    // Esperar 2 segundos antes del retry (especialmente útil para rate limits)
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     try {
       return await createPost(data);
     } catch (retryError) {
       console.error('[Pioneer] Retry falló:', retryError);
-      // Si el retry también falla, devolver el error del retry
       throw retryError;
     }
   }
 }
 
 // === EJECUTAR TOOLS — LLAMADAS DIRECTAS (sin fetch HTTP) ===
-// FIX: En Vercel serverless, una función no puede llamarse a sí misma via HTTP.
-// Ahora importamos y llamamos las funciones directamente.
 
 async function executeTool(
   toolName: string,
-  toolInput: Record<string, unknown>
+  toolInput: Record<string, unknown>,
+  generateImageWasCalled: boolean
 ): Promise<string> {
   try {
     switch (toolName) {
       case 'list_connected_accounts': {
-        // Llamada directa a late-client.ts
         const result = await listAccounts();
         return JSON.stringify({
           success: true,
@@ -770,7 +784,6 @@ async function executeTool(
           platform: string;
           profile_id: string;
         };
-        // Llamada directa a late-client.ts
         const result = await getConnectUrl(
           input.platform as Platform,
           input.profile_id
@@ -792,7 +805,6 @@ async function executeTool(
           tone?: string;
           include_hashtags?: boolean;
         };
-        // Llamada directa a content-generator.ts
         const result = await generateContent({
           business_name: input.business_name,
           business_type: input.business_type,
@@ -812,7 +824,6 @@ async function executeTool(
           aspect_ratio?: string;
           num_outputs?: number;
         };
-        // Llamada directa a replicate-client.ts
         const result = await generateImage({
           prompt: input.prompt,
           model: (input.model as 'schnell' | 'pro') || 'schnell',
@@ -833,8 +844,7 @@ async function executeTool(
         };
 
         // === NIVEL 1: VALIDACIÓN PREVENTIVA ===
-        // Verifica account_ids, auto-corrige, valida contenido, filtra URLs inválidas
-        const validation = await validateAndPreparePublish(input);
+        const validation = await validateAndPreparePublish(input, generateImageWasCalled);
 
         if (!validation.success || !validation.data) {
           return JSON.stringify({
@@ -844,13 +854,11 @@ async function executeTool(
           });
         }
 
-        // Log correcciones silenciosas (el cliente no las ve)
         if (validation.corrections && validation.corrections.length > 0) {
           console.log('[Pioneer] Correcciones preventivas:', validation.corrections);
         }
 
         // === NIVEL 2: PUBLICAR CON RETRY INTELIGENTE ===
-        // 1 retry automático solo para errores transitorios
         try {
           const result = await publishWithRetry(validation.data);
 
@@ -864,14 +872,12 @@ async function executeTool(
               scheduledFor: validation.data.scheduledFor,
               timezone: validation.data.timezone,
             }),
-            // Incluir info sobre correcciones en el log (no visible al cliente)
             ...(validation.corrections &&
               validation.corrections.length > 0 && {
                 _corrections: validation.corrections,
               }),
           });
         } catch (publishError) {
-          // Publicación falló incluso después del retry
           console.error('[Pioneer] Publicación falló después de validación y retry:', publishError);
 
           const errorMessage =
@@ -901,7 +907,11 @@ async function executeTool(
 }
 
 // === MÁXIMO DE ITERACIONES DEL LOOP DE TOOL_USE ===
-const MAX_TOOL_USE_ITERATIONS = 5;
+// Aumentado de 5 a 10 para permitir flujo completo con imagen:
+// list_connected_accounts → generate_content → generate_image → publish_post → respuesta final
+// Con texto intermedio entre tools, 5 iteraciones no era suficiente y Claude
+// saltaba generate_image para "ahorrar" iteraciones.
+const MAX_TOOL_USE_ITERATIONS = 10;
 
 export async function POST(request: NextRequest) {
   try {
@@ -923,14 +933,13 @@ export async function POST(request: NextRequest) {
     );
 
     // === LOOP DE TOOL_USE ===
-    // Claude puede responder con tool_use, en cuyo caso ejecutamos la tool
-    // y le devolvemos el resultado para que continúe.
-
     let currentMessages = [...formattedMessages];
     let finalTextParts: string[] = [];
 
+    // === TRACKING: ¿Se llamó generate_image en esta sesión? ===
+    let generateImageWasCalled = false;
+
     for (let iteration = 0; iteration < MAX_TOOL_USE_ITERATIONS; iteration++) {
-      // Llamar a Claude API con tools
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5-20250929',
         max_tokens: 2048,
@@ -939,7 +948,7 @@ export async function POST(request: NextRequest) {
         messages: currentMessages,
       });
 
-      // Recoger todo el texto que Claude haya generado en esta iteración
+      // Recoger texto de esta iteración
       const textBlocks = response.content.filter(
         (block): block is Anthropic.TextBlock => block.type === 'text'
       );
@@ -947,7 +956,7 @@ export async function POST(request: NextRequest) {
         finalTextParts.push(...textBlocks.map((b) => b.text));
       }
 
-      // Si Claude terminó (no quiere usar más tools), devolver respuesta
+      // Si Claude terminó, devolver respuesta
       if (response.stop_reason === 'end_turn') {
         return NextResponse.json({
           message: finalTextParts.join('\n\n'),
@@ -962,7 +971,6 @@ export async function POST(request: NextRequest) {
         );
 
         if (toolUseBlocks.length === 0) {
-          // No debería pasar, pero por seguridad
           return NextResponse.json({
             message:
               finalTextParts.join('\n\n') ||
@@ -980,9 +988,15 @@ export async function POST(request: NextRequest) {
             toolBlock.input
           );
 
+          // Tracking: marcar si generate_image fue llamada
+          if (toolBlock.name === 'generate_image') {
+            generateImageWasCalled = true;
+          }
+
           const result = await executeTool(
             toolBlock.name,
-            toolBlock.input as Record<string, unknown>
+            toolBlock.input as Record<string, unknown>,
+            generateImageWasCalled
           );
 
           console.log(
@@ -997,14 +1011,13 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        // Agregar la respuesta de Claude (con tool_use) y los resultados al historial
+        // Agregar respuesta de Claude y resultados al historial
         currentMessages = [
           ...currentMessages,
           { role: 'assistant' as const, content: response.content },
           { role: 'user' as const, content: toolResults },
         ];
 
-        // Continuar el loop — Claude procesará los resultados
         continue;
       }
 
@@ -1017,7 +1030,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Si llegamos aquí, excedimos el máximo de iteraciones
+    // Excedimos el máximo de iteraciones
     return NextResponse.json({
       message:
         finalTextParts.join('\n\n') +
