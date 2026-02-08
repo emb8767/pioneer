@@ -42,10 +42,14 @@ async function lateRequest<T>(
 
   if (!response.ok) {
     const errorBody = await response.text();
+    // Extraer Retry-After header (Late.dev lo envía en respuestas 429)
+    const retryAfterHeader = response.headers.get('Retry-After');
+    const retryAfterMs = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : null;
     throw new LateApiError(
       `Late.dev API error: ${response.status} ${response.statusText}`,
       response.status,
-      errorBody
+      errorBody,
+      retryAfterMs
     );
   }
 
@@ -57,12 +61,14 @@ async function lateRequest<T>(
 export class LateApiError extends Error {
   status: number;
   body: string;
+  retryAfterMs: number | null;
 
-  constructor(message: string, status: number, body: string) {
+  constructor(message: string, status: number, body: string, retryAfterMs?: number | null) {
     super(message);
     this.name = 'LateApiError';
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs || null;
   }
 }
 
@@ -504,7 +510,7 @@ export function getNextOptimalTime(): string {
       targetHour = 13;
     } else {
       // Ya pasaron los horarios del fin de semana
-      daysToAdd = day === 6 ? 2 : 1; // Saltar al lunes
+      daysToAdd = day === 6 ? 2 : 1; // Sáb→Lun, Dom→Lun
       targetHour = 12;
     }
   }
@@ -513,13 +519,8 @@ export function getNextOptimalTime(): string {
   target.setDate(target.getDate() + daysToAdd);
   target.setHours(targetHour, 0, 0, 0);
 
-  // Formatear como ISO sin timezone (Late.dev usa el campo timezone separado)
-  const year = target.getFullYear();
-  const month = String(target.getMonth() + 1).padStart(2, '0');
-  const dayStr = String(target.getDate()).padStart(2, '0');
-  const hourStr = String(target.getHours()).padStart(2, '0');
-
-  return `${year}-${month}-${dayStr}T${hourStr}:00:00`;
+  // Formato ISO sin milisegundos (Late.dev requirement)
+  return target.toISOString().replace(/\.\d{3}Z$/, '');
 }
 
 export const PR_TIMEZONE = 'America/Puerto_Rico';

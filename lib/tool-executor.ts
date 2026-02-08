@@ -159,11 +159,8 @@ export async function executeTool(
 
         const imageCount = input.count && input.count > 1 ? Math.min(input.count, 10) : 0;
 
-        // === CARRUSEL: Generación secuencial con delay (Replicate free plan) ===
-        // NOTA: Cuando se tenga plan pagado de Replicate, cambiar a Promise.all (paralelo)
+        // === CARRUSEL / MULTI-IMAGEN ===
         if (imageCount > 1) {
-          console.log(`[Pioneer] Generando carrusel de ${imageCount} imágenes (secuencial, ${CAROUSEL_IMAGE_DELAY_MS / 1000}s delay)`);
-
           const allImages: string[] = [];
           let totalCostReal = 0;
           let totalCostClient = 0;
@@ -171,35 +168,29 @@ export async function executeTool(
           const errors: string[] = [];
 
           for (let i = 0; i < imageCount; i++) {
-            // Delay entre imágenes (no antes de la primera)
+            // Delay entre imágenes (excepto la primera) — Replicate free plan
             if (i > 0) {
-              console.log(`[Pioneer] Esperando ${CAROUSEL_IMAGE_DELAY_MS / 1000}s antes de imagen ${i + 1}/${imageCount}...`);
+              console.log(`[Pioneer] Esperando ${CAROUSEL_IMAGE_DELAY_MS / 1000}s antes de generar imagen ${i + 1}/${imageCount}...`);
               await new Promise(resolve => setTimeout(resolve, CAROUSEL_IMAGE_DELAY_MS));
             }
 
-            console.log(`[Pioneer] Generando imagen ${i + 1}/${imageCount}...`);
-
             try {
-              const result = await generateImage({
+              const imgResult = await generateImage({
                 prompt: input.prompt,
                 model: (input.model as 'schnell' | 'pro') || 'schnell',
                 aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
                 num_outputs: 1,
               });
 
-              if (result.success && result.images && result.images.length > 0) {
-                allImages.push(...result.images);
-                totalCostReal += result.cost_real;
-                totalCostClient += result.cost_client;
-                if (result.regenerated) anyRegenerated = true;
-                console.log(`[Pioneer] Imagen ${i + 1}/${imageCount} generada exitosamente.`);
+              if (imgResult.success && imgResult.image_url) {
+                allImages.push(imgResult.image_url);
+                totalCostReal += imgResult.cost_real || 0;
+                totalCostClient += imgResult.cost_client || 0;
+                if (imgResult.regenerated) anyRegenerated = true;
               } else {
-                const errorMsg = result.error || 'Error desconocido';
-                errors.push(`Imagen ${i + 1}: ${errorMsg}`);
-                console.error(`[Pioneer] Error en imagen ${i + 1}:`, errorMsg);
+                errors.push(`Imagen ${i + 1}: ${imgResult.error || 'Error desconocido'}`);
               }
             } catch (imgError) {
-              console.error(`[Pioneer] Error en imagen ${i + 1}:`, imgError);
               errors.push(`Imagen ${i + 1}: ${imgError instanceof Error ? imgError.message : 'Error desconocido'}`);
             }
           }
@@ -316,13 +307,8 @@ export async function executeTool(
 
           const imageIncluded = !!(validation.data.mediaItems && validation.data.mediaItems.length > 0);
 
-          const wasAutoRescheduled = 'autoRescheduled' in result && result.autoRescheduled;
-          const rescheduledFor = 'rescheduledFor' in result ? result.rescheduledFor : undefined;
-
           let successMessage: string;
-          if (wasAutoRescheduled && rescheduledFor) {
-            successMessage = `La plataforma indicó "posting too fast". El post fue auto-reprogramado para ${rescheduledFor} (en ~30 minutos). No se requiere acción del cliente.`;
-          } else if (validation.data.queuedFromProfile) {
+          if (validation.data.queuedFromProfile) {
             successMessage = `Post agregado a la cola de publicación. Se publicará automáticamente en el próximo horario disponible.`;
           } else if (validation.data.publishNow) {
             successMessage = 'Post publicado exitosamente';
@@ -336,15 +322,11 @@ export async function executeTool(
               message: successMessage,
               post: result.post,
               image_included: imageIncluded,
-              ...(wasAutoRescheduled && {
-                auto_rescheduled: true,
-                rescheduled_for: rescheduledFor,
-              }),
               ...(validation.data.queuedFromProfile && {
                 queued: true,
                 queue_profile_id: validation.data.queuedFromProfile,
               }),
-              ...(validation.data.scheduledFor && !wasAutoRescheduled && {
+              ...(validation.data.scheduledFor && {
                 scheduledFor: validation.data.scheduledFor,
                 timezone: validation.data.timezone,
               }),

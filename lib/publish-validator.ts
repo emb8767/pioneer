@@ -216,15 +216,30 @@ export async function validateAndPreparePublish(
 
 // === RETRY INTELIGENTE ===
 
-// Detectar si el error es "posting too fast" de Facebook/plataforma
-function isPostingTooFast(error: unknown): boolean {
-  if (error instanceof LateApiError) {
-    const bodyLower = error.body.toLowerCase();
-    return bodyLower.includes('posting too fast') || bodyLower.includes('rate limit');
-  }
-  return false;
+// Parsear error categorizado de Late.dev (changelog Feb 2, 2026)
+interface LateErrorInfo {
+  category: 'auth_expired' | 'user_content' | 'user_abuse' | 'account_issue' | 'platform_rejected' | 'platform_error' | 'system_error' | 'unknown';
+  source: 'user' | 'platform' | 'system' | 'unknown';
+  message: string;
 }
 
+function parseLateDevError(error: LateApiError): LateErrorInfo | null {
+  try {
+    const body = JSON.parse(error.body);
+    if (body.errorCategory) {
+      return {
+        category: body.errorCategory,
+        source: body.errorSource || 'unknown',
+        message: body.errorMessage || error.message,
+      };
+    }
+  } catch {
+    // body no es JSON parseable
+  }
+  return null;
+}
+
+// Detectar errores transitorios (entre Pioneer y Late.dev)
 function isTransientError(error: unknown): boolean {
   if (error instanceof LateApiError) {
     if (error.status >= 500) {
@@ -239,42 +254,39 @@ function isTransientError(error: unknown): boolean {
   return false;
 }
 
-// Calcula una fecha +30 minutos desde ahora en PR timezone
-function getScheduleIn30Min(): string {
-  const now = new Date();
-  now.setMinutes(now.getMinutes() + 30);
-  return now.toISOString().replace(/\.\d{3}Z$/, '');
+// Obtener tiempo de espera del Retry-After header de Late.dev
+function getRetryAfterMs(error: unknown): number | null {
+  if (error instanceof LateApiError) {
+    // Usar retryAfterMs extraído del header en lateRequest()
+    if (error.retryAfterMs) {
+      return error.retryAfterMs;
+    }
+    // Fallback para 429 sin header: 10s basado en velocity limit de 15 posts/hora
+    if (error.status === 429) {
+      return 10_000;
+    }
+  }
+  return null;
 }
 
 export async function publishWithRetry(
   data: ValidatedPublishData
-): Promise<{ message: string; post: unknown; autoRescheduled?: boolean; rescheduledFor?: string }> {
+): Promise<{ message: string; post: unknown }> {
   try {
     const result = await createPost(data);
     return result;
   } catch (firstError) {
     console.error('[Pioneer] Primer intento de publicación falló:', firstError);
 
-    // === AUTO-REPROGRAMAR si "posting too fast" ===
-    if (isPostingTooFast(firstError)) {
-      console.log('[Pioneer] "Posting too fast" detectado. Auto-reprogramando para +30 minutos...');
-      const rescheduleTime = getScheduleIn30Min();
-      const rescheduledData: ValidatedPublishData = {
-        ...data,
-        publishNow: false,
-        scheduledFor: rescheduleTime,
-        timezone: PR_TIMEZONE,
-      };
-      try {
-        const result = await createPost(rescheduledData);
-        return {
-          ...result,
-          autoRescheduled: true,
-          rescheduledFor: rescheduleTime,
-        };
-      } catch (rescheduleError) {
-        console.error('[Pioneer] Auto-reprogramación también falló:', rescheduleError);
-        throw rescheduleError;
+    // Parsear errorCategory de Late.dev si disponible
+    if (firstError instanceof LateApiError) {
+      const errorInfo = parseLateDevError(firstError);
+      if (errorInfo) {
+        console.log(`[Pioneer] Late.dev errorCategory: ${errorInfo.category}, source: ${errorInfo.source}`);
+        // No reintentar errores de usuario o contenido — el cliente necesita actuar
+        if (errorInfo.source === 'user') {
+          throw firstError;
+        }
       }
     }
 
@@ -282,8 +294,12 @@ export async function publishWithRetry(
       throw firstError;
     }
 
-    console.log('[Pioneer] Error transitorio detectado. Reintentando (1/1)...');
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // Leer Retry-After header si disponible (Late.dev lo envía en 429)
+    const retryAfterMs = getRetryAfterMs(firstError);
+    const waitTime = retryAfterMs || 2000;
+
+    console.log(`[Pioneer] Error transitorio. Reintentando en ${waitTime}ms...`);
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
 
     try {
       return await createPost(data);

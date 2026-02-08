@@ -137,9 +137,16 @@ Horarios óptimos PR (America/Puerto_Rico, UTC-4):
 - Lun-Vie: 12:00 PM o 7:00 PM
 - Sáb-Dom: 10:00 AM o 1:00 PM
 
-Límites de plataformas:
-- Facebook: máximo 25 posts/día, mínimo 20 minutos entre posts. Si un plan tiene múltiples posts para el mismo día, programarlos con al menos 1 hora de separación.
-- Si publish_post falla con "posting too fast", el sistema auto-reprograma para +30 minutos. Informa al cliente que el post fue reprogramado automáticamente.
+Límites de plataformas (manejados por Late.dev):
+- Facebook/Instagram: 100 posts/día
+- Twitter/X: 20 posts/día
+- Pinterest: 25 posts/día
+- Threads: 250 posts/día
+- Otras plataformas: 50 posts/día
+- Velocidad: máximo 15 posts/hora por cuenta
+- Late.dev maneja rate limits automáticamente. Si un post falla por rate limit, Late.dev devuelve el tiempo de espera. El sistema reintenta automáticamente.
+- Contenido duplicado: Late.dev rechaza contenido idéntico en la misma cuenta dentro de 24 horas.
+- Si un plan tiene múltiples posts para el mismo día, programarlos con al menos 1 hora de separación como buena práctica.
 
 === REGLA CRÍTICA DE PUBLICACIÓN ===
 

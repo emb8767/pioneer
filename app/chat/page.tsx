@@ -7,6 +7,106 @@ interface Message {
   content: string;
 }
 
+// === RENDERIZAR CONTENIDO DEL MENSAJE ===
+// Parsea markdown básico: imágenes ![alt](url), bold **text**, y URLs de replicate.delivery
+function MessageContent({ content }: { content: string }) {
+  const parts: React.ReactNode[] = [];
+  const lines = content.split('\n');
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
+
+    if (lineIdx > 0) {
+      parts.push(<br key={`br-${lineIdx}`} />);
+    }
+
+    // Regex para detectar patrones en la línea
+    // 1. Markdown images: ![alt](url)
+    // 2. Bare replicate URLs: https://replicate.delivery/...
+    // 3. Bold: **text**
+    const combinedRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)|(https:\/\/replicate\.delivery\/[^\s)]+)|\*\*([^*]+)\*\*/g;
+
+    let lastIndex = 0;
+    let match;
+
+    while ((match = combinedRegex.exec(line)) !== null) {
+      // Add text before the match
+      if (match.index > lastIndex) {
+        parts.push(
+          <span key={`text-${lineIdx}-${lastIndex}`}>
+            {line.slice(lastIndex, match.index)}
+          </span>
+        );
+      }
+
+      if (match[1] !== undefined && match[2]) {
+        // Markdown image: ![alt](url)
+        const url = match[2];
+        const alt = match[1] || 'Imagen generada';
+        parts.push(
+          <span key={`img-${lineIdx}-${match.index}`} className="block my-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt={alt}
+              className="max-w-full rounded-lg shadow-md"
+              style={{ maxHeight: '400px', objectFit: 'contain' }}
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                const fallback = document.createElement('p');
+                fallback.textContent = '⚠️ No se pudo cargar la imagen. La URL puede haber expirado.';
+                fallback.className = 'text-amber-600 text-sm mt-1';
+                target.parentElement?.appendChild(fallback);
+              }}
+            />
+          </span>
+        );
+      } else if (match[3]) {
+        // Bare replicate URL
+        const url = match[3];
+        parts.push(
+          <span key={`bareimg-${lineIdx}-${match.index}`} className="block my-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt="Imagen generada"
+              className="max-w-full rounded-lg shadow-md"
+              style={{ maxHeight: '400px', objectFit: 'contain' }}
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                const fallback = document.createElement('p');
+                fallback.textContent = '⚠️ No se pudo cargar la imagen. La URL puede haber expirado.';
+                fallback.className = 'text-amber-600 text-sm mt-1';
+                target.parentElement?.appendChild(fallback);
+              }}
+            />
+          </span>
+        );
+      } else if (match[4]) {
+        // Bold text: **text**
+        parts.push(
+          <strong key={`bold-${lineIdx}-${match.index}`}>{match[4]}</strong>
+        );
+      }
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining text after last match
+    if (lastIndex < line.length) {
+      parts.push(
+        <span key={`text-${lineIdx}-${lastIndex}`}>
+          {line.slice(lastIndex)}
+        </span>
+      );
+    }
+  }
+
+  return <div className="whitespace-pre-wrap">{parts}</div>;
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -50,7 +150,8 @@ export default function ChatPage() {
 
       // Enviar mensaje automático después de que el componente se monte
       const platformName = getPlatformDisplayName(pendingPlatform);
-      const autoMessage = `Acabo de autorizar ${platformName}. Necesito completar la conexión.`;
+      const autoMessage = `Acabo de autorizar ${platformName}.
+Necesito completar la conexión.`;
 
       // Pequeño delay para que el chat esté listo
       setTimeout(() => {
@@ -168,7 +269,7 @@ export default function ChatPage() {
                     : 'bg-white border border-gray-200 text-gray-800'
                 }`}
               >
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                <MessageContent content={message.content} />
               </div>
             </div>
           ))}
