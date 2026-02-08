@@ -37,6 +37,12 @@ export async function GET(request: NextRequest) {
     const profileId = searchParams.get('profileId') || '';
     const connectToken = searchParams.get('connect_token') || '';
 
+    // LOG: Ver todos los params que Late.dev nos envió
+    console.log(`[Pioneer] OAuth callback headless — platform: ${platform}, step: ${step}`);
+    console.log(`[Pioneer] OAuth callback params — profileId: ${profileId}, connectToken: ${connectToken ? connectToken.substring(0, 20) + '...' : 'EMPTY'}`);
+    console.log(`[Pioneer] OAuth callback — tempToken present: ${!!searchParams.get('tempToken')}, userProfile present: ${!!searchParams.get('userProfile')}`);
+    console.log(`[Pioneer] OAuth callback — ALL params: ${searchParams.toString().substring(0, 500)}`);
+
     // Construir datos para la cookie según la plataforma
     const pendingData: OAuthPendingData = {
       platform,

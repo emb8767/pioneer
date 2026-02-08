@@ -26,7 +26,7 @@ import {
 } from '@/lib/late-client';
 import { generateContent, PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
 import { generateImage, suggestAspectRatio, buildImagePrompt } from '@/lib/replicate-client';
-import { getOAuthCookieFromHeaders, COOKIE_NAME } from '@/lib/oauth-cookie';
+import { getOAuthCookie, COOKIE_NAME } from '@/lib/oauth-cookie';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform, LatePlatformTarget } from '@/lib/types';
 
@@ -764,12 +764,14 @@ async function executeTool(
   lastGeneratedImageUrl: string | null,
   // OAuth headless context
   pendingOAuthData: OAuthPendingData | null,
-  linkedInCachedData: Record<string, unknown> | null
+  linkedInCachedData: Record<string, unknown> | null,
+  cachedConnectionOptions: Array<{ id: string; name: string }> | null
 ): Promise<{
   result: string;
   publishPostCalled: boolean;
   shouldClearOAuthCookie: boolean;
   linkedInDataToCache: Record<string, unknown> | null;
+  connectionOptionsToCache: Array<{ id: string; name: string }> | null;
 }> {
   try {
     switch (toolName) {
@@ -784,6 +786,7 @@ async function executeTool(
           publishPostCalled: false,
           shouldClearOAuthCookie: false,
           linkedInDataToCache: null,
+          connectionOptionsToCache: null,
         };
       }
 
@@ -813,6 +816,7 @@ async function executeTool(
           publishPostCalled: false,
           shouldClearOAuthCookie: false,
           linkedInDataToCache: null,
+          connectionOptionsToCache: null,
         };
       }
 
@@ -840,6 +844,7 @@ async function executeTool(
           publishPostCalled: false,
           shouldClearOAuthCookie: false,
           linkedInDataToCache: null,
+          connectionOptionsToCache: null,
         };
       }
 
@@ -862,6 +867,7 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
 
@@ -889,6 +895,7 @@ async function executeTool(
           publishPostCalled: false,
           shouldClearOAuthCookie: false,
           linkedInDataToCache: null,
+          connectionOptionsToCache: null,
         };
       }
 
@@ -903,6 +910,7 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
 
@@ -934,6 +942,7 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
 
@@ -967,6 +976,7 @@ async function executeTool(
             publishPostCalled: true,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         } catch (publishError) {
           console.error('[Pioneer] Publicación falló después de validación y retry:', publishError);
@@ -987,6 +997,7 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
       }
@@ -1008,6 +1019,7 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
 
@@ -1028,26 +1040,29 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
               const fbResult = await getFacebookPages(profileId, tempToken, connectToken);
+              const fbOptions = fbResult.pages.map(p => ({
+                id: p.id,
+                name: p.name,
+                username: p.username || '',
+                category: p.category || '',
+              }));
               return {
                 result: JSON.stringify({
                   success: true,
                   platform,
                   step,
                   options_type: 'pages',
-                  options: fbResult.pages.map(p => ({
-                    id: p.id,
-                    name: p.name,
-                    username: p.username || '',
-                    category: p.category || '',
-                  })),
-                  message: `Se encontraron ${fbResult.pages.length} página(s) de Facebook. Muestre las opciones al cliente para que elija una.`,
+                  options: fbOptions,
+                  message: `Se encontraron ${fbResult.pages.length} página(s) de Facebook. Muestre las opciones al cliente para que elija una. IMPORTANTE: Cuando llame complete_connection, use EXACTAMENTE el "id" de la opción seleccionada.`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: fbOptions.map(o => ({ id: o.id, name: o.name })),
               };
             }
 
@@ -1067,6 +1082,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: true,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
 
@@ -1097,6 +1113,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: true,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
 
@@ -1129,6 +1146,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: linkedInCacheForTool,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1142,6 +1160,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
               const pinResult = await getPinterestBoards(profileId, tempToken, connectToken);
@@ -1161,6 +1180,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1174,6 +1194,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
               const gmbResult = await getGoogleBusinessLocations(profileId, tempToken, connectToken);
@@ -1193,6 +1214,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1210,6 +1232,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1222,6 +1245,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
           }
         } catch (error) {
@@ -1237,6 +1261,7 @@ async function executeTool(
               publishPostCalled: false,
               shouldClearOAuthCookie: true, // Limpiar cookie expirada
               linkedInDataToCache: null,
+              connectionOptionsToCache: null,
             };
           }
 
@@ -1248,6 +1273,7 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
       }
@@ -1275,15 +1301,41 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
 
         const { profileId, tempToken, connectToken, userProfile } = pending;
-        const { selection_id, selection_name } = input;
+        let { selection_id } = input;
+        const { selection_name } = input;
         const platform = input.platform || pending.platform;
 
         console.log(`[Pioneer] complete_connection: ${platform} → ${selection_id} (${selection_name})`);
+        console.log(`[Pioneer] Cookie data — profileId: ${profileId}, tempToken: ${tempToken ? tempToken.substring(0, 20) + '...' : 'NULL'}, connectToken: ${connectToken ? connectToken.substring(0, 20) + '...' : 'NULL'}, userProfile: ${userProfile ? JSON.stringify(userProfile).substring(0, 100) : 'NULL'}`);
 
+        // === AUTO-CORRECCIÓN: Si Claude alucinó un selection_id, usar el correcto del cache ===
+        if (cachedConnectionOptions && cachedConnectionOptions.length > 0) {
+          const exactMatch = cachedConnectionOptions.find(o => o.id === selection_id);
+          if (!exactMatch) {
+            // Claude usó un ID que no existe en las opciones reales
+            // Intentar match por nombre
+            const nameMatch = selection_name
+              ? cachedConnectionOptions.find(o => o.name.toLowerCase() === selection_name.toLowerCase())
+              : null;
+
+            if (nameMatch) {
+              console.warn(`[Pioneer] ⚠️ AUTO-CORRECCIÓN: selection_id "${selection_id}" no encontrado. Corregido a "${nameMatch.id}" por match de nombre "${nameMatch.name}"`);
+              selection_id = nameMatch.id;
+            } else if (cachedConnectionOptions.length === 1) {
+              // Solo hay una opción — usar esa
+              console.warn(`[Pioneer] ⚠️ AUTO-CORRECCIÓN: selection_id "${selection_id}" no encontrado. Solo hay 1 opción disponible, usando "${cachedConnectionOptions[0].id}" (${cachedConnectionOptions[0].name})`);
+              selection_id = cachedConnectionOptions[0].id;
+            } else {
+              console.warn(`[Pioneer] ⚠️ selection_id "${selection_id}" no coincide con ninguna opción conocida. Opciones: ${JSON.stringify(cachedConnectionOptions)}`);
+              // Continuar con el ID que Claude proporcionó — Late.dev dará el error real
+            }
+          }
+        }
         try {
           switch (platform) {
             case 'facebook':
@@ -1297,6 +1349,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
               await saveFacebookPage(profileId, selection_id, tempToken, userProfile, connectToken);
@@ -1310,6 +1363,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: true,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1330,6 +1384,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
 
@@ -1359,6 +1414,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: true,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1372,6 +1428,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
               await savePinterestBoard(
@@ -1392,6 +1449,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: true,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1405,6 +1463,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
               await saveGoogleBusinessLocation(
@@ -1424,6 +1483,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: true,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1437,6 +1497,7 @@ async function executeTool(
                   publishPostCalled: false,
                   shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
                 };
               }
               await saveSnapchatProfile(
@@ -1456,6 +1517,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: true,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
             }
 
@@ -1468,6 +1530,7 @@ async function executeTool(
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
+                connectionOptionsToCache: null,
               };
           }
         } catch (error) {
@@ -1483,6 +1546,7 @@ async function executeTool(
               publishPostCalled: false,
               shouldClearOAuthCookie: true,
               linkedInDataToCache: null,
+              connectionOptionsToCache: null,
             };
           }
 
@@ -1494,6 +1558,7 @@ async function executeTool(
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
             linkedInDataToCache: null,
+            connectionOptionsToCache: null,
           };
         }
       }
@@ -1504,6 +1569,7 @@ async function executeTool(
           publishPostCalled: false,
           shouldClearOAuthCookie: false,
           linkedInDataToCache: null,
+          connectionOptionsToCache: null,
         };
     }
   } catch (error) {
@@ -1515,6 +1581,7 @@ async function executeTool(
       publishPostCalled: false,
       shouldClearOAuthCookie: false,
       linkedInDataToCache: null,
+      connectionOptionsToCache: null,
     };
   }
 }
@@ -1542,11 +1609,16 @@ export async function POST(request: NextRequest) {
     );
 
     // === LEER COOKIE OAUTH AL INICIO DEL REQUEST ===
-    // Usamos getOAuthCookieFromHeaders() que funciona en Route Handlers
-    // La leemos UNA VEZ y la pasamos a executeTool para evitar múltiples lecturas
+    // Usamos getOAuthCookie(request) que lee directamente de NextRequest.cookies
+    // Más confiable que cookies() de next/headers en Route Handlers
     let pendingOAuthData: OAuthPendingData | null = null;
     try {
-      pendingOAuthData = await getOAuthCookieFromHeaders();
+      // Log all cookies for debugging
+      const allCookies = request.cookies.getAll();
+      console.log(`[Pioneer] Cookies en request (${allCookies.length}):`, allCookies.map(c => c.name));
+      
+      pendingOAuthData = getOAuthCookie(request);
+      console.log(`[Pioneer] OAuth cookie leída:`, pendingOAuthData ? `platform=${pendingOAuthData.platform}, step=${pendingOAuthData.step}` : 'null');
     } catch (error) {
       console.warn('[Pioneer] No se pudo leer OAuth cookie:', error);
     }
@@ -1562,6 +1634,7 @@ export async function POST(request: NextRequest) {
     let hallucinationRetryUsed = false;
     let shouldClearOAuthCookie = false;
     let linkedInCachedData: Record<string, unknown> | null = null;
+    let cachedConnectionOptions: Array<{ id: string; name: string }> | null = null;
 
     // Generar system prompt con fecha actual
     const systemPrompt = buildSystemPrompt();
@@ -1667,7 +1740,8 @@ export async function POST(request: NextRequest) {
             hallucinationRetryUsed,
             lastGeneratedImageUrl,
             pendingOAuthData,
-            linkedInCachedData
+            linkedInCachedData,
+            cachedConnectionOptions
           );
 
           // Tracking: capturar URL de imagen para reutilizar en retry de alucinación
@@ -1693,6 +1767,11 @@ export async function POST(request: NextRequest) {
           // Tracking: LinkedIn cached data
           if (toolResult.linkedInDataToCache) {
             linkedInCachedData = toolResult.linkedInDataToCache;
+          }
+
+          // Tracking: Connection options cache (for auto-correction in complete_connection)
+          if (toolResult.connectionOptionsToCache) {
+            cachedConnectionOptions = toolResult.connectionOptionsToCache;
           }
 
           console.log(
