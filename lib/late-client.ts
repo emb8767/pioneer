@@ -478,15 +478,32 @@ export async function getQueueSlots(
  * Sáb-Dom: 10:00 AM o 1:00 PM
  */
 export function getNextOptimalTime(): string {
-  const now = new Date();
+  // Obtener hora actual en Puerto Rico usando Intl (correcto independientemente del timezone del servidor)
+  const prFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Puerto_Rico',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  });
 
-  // Convertir a hora de Puerto Rico (UTC-4)
-  const prOffset = -4 * 60;
-  const utcTime = now.getTime() + now.getTimezoneOffset() * 60000;
-  const prTime = new Date(utcTime + prOffset * 60000);
+  const parts = prFormatter.formatToParts(new Date());
+  const get = (type: string) => parts.find(p => p.type === type)?.value || '';
 
-  const day = prTime.getDay(); // 0=Dom, 6=Sáb
-  const hour = prTime.getHours();
+  const year = parseInt(get('year'));
+  const month = parseInt(get('month'));
+  const dayNum = parseInt(get('day'));
+  const hour = parseInt(get('hour'));
+  const weekdayStr = get('weekday'); // Mon, Tue, Wed, Thu, Fri, Sat, Sun
+
+  // Mapear weekday string a número (0=Sun como JS Date)
+  const weekdayMap: Record<string, number> = {
+    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+  };
+  const day = weekdayMap[weekdayStr] ?? 0;
 
   let targetHour: number;
   let daysToAdd = 0;
@@ -515,12 +532,12 @@ export function getNextOptimalTime(): string {
     }
   }
 
-  const target = new Date(prTime);
-  target.setDate(target.getDate() + daysToAdd);
-  target.setHours(targetHour, 0, 0, 0);
+  // Construir fecha target — componentes ya están en timezone PR
+  const target = new Date(year, month - 1, dayNum + daysToAdd);
+  const pad = (n: number) => n.toString().padStart(2, '0');
 
-  // Formato ISO sin milisegundos (Late.dev requirement)
-  return target.toISOString().replace(/\.\d{3}Z$/, '');
+  // Formato ISO sin milisegundos ni Z (Late.dev requirement)
+  return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(targetHour)}:00:00`;
 }
 
 export const PR_TIMEZONE = 'America/Puerto_Rico';

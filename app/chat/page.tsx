@@ -153,17 +153,20 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Mensaje de bienvenida
+  // Mensaje de bienvenida — solo se ejecuta en el mount inicial
   useEffect(() => {
-    if (messages.length === 0) {
-      setMessages([
-        {
-          role: 'assistant',
-          content:
-            '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
-        },
-      ]);
-    }
+    setMessages((prev) => {
+      if (prev.length === 0) {
+        return [
+          {
+            role: 'assistant',
+            content:
+              '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
+          },
+        ];
+      }
+      return prev;
+    });
   }, []);
 
   // === DETECTAR ?pending_connection EN LA URL ===
@@ -193,37 +196,40 @@ Necesito completar la conexión.`;
     if (isLoading) return;
 
     const userMessage: Message = { role: 'user', content: messageText };
-    setMessages(prev => [...prev, userMessage]);
-    setIsLoading(true);
-
-    try {
-      const messagesToSend = [{ role: 'user', content: messageText }];
-
-      const response = await fetch('/api/chat', {
+    setMessages(prev => {
+      const updated = [...prev, userMessage];
+      // Enviar con historial completo (excluyendo welcome message)
+      const messagesToSend = updated.slice(1);
+      
+      fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: messagesToSend }),
-      });
+      })
+        .then(response => {
+          if (!response.ok) throw new Error('Error en la respuesta del servidor');
+          return response.json();
+        })
+        .then(data => {
+          setMessages(prev2 => [...prev2, { role: 'assistant', content: data.message }]);
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          setMessages(prev2 => [
+            ...prev2,
+            {
+              role: 'assistant',
+              content: 'Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.',
+            },
+          ]);
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
 
-      if (!response.ok) {
-        throw new Error('Error en la respuesta del servidor');
-      }
-
-      const data = await response.json();
-      setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
-    } catch (error) {
-      console.error('Error:', error);
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content:
-            'Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.',
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+      return updated;
+    });
+    setIsLoading(true);
   };
 
   const sendMessage = async () => {

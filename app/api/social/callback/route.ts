@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
 
     // Guardar tokens en cookie httpOnly encriptada
     const platformName = getPlatformDisplayName(platform);
-    const html = buildHeadlessRedirectPage(platformName, step);
+    const html = buildHeadlessRedirectPage(platform, platformName, step);
 
     const response = new NextResponse(html, {
       status: 200,
@@ -196,7 +196,7 @@ function buildSuccessPage(platform: string, username: string, profileId: string)
 </html>`;
 }
 
-function buildHeadlessRedirectPage(platformName: string, step: string): string {
+function buildHeadlessRedirectPage(platformKey: string, platformName: string, step: string): string {
   // Traducir el step a texto amigable
   const stepText: Record<string, string> = {
     select_page: 'seleccionar su página',
@@ -289,12 +289,12 @@ function buildHeadlessRedirectPage(platformName: string, step: string): string {
       <span class="spinner"></span>
       Pioneer le guiará para completar este paso en el chat.
     </div>
-    <a href="/chat?pending_connection=${encodeURIComponent(platformName.toLowerCase())}" class="btn">Completar en el Chat</a>
+    <a href="/chat?pending_connection=${encodeURIComponent(platformKey)}" class="btn">Completar en el Chat</a>
     <p class="auto-redirect">Será redirigido automáticamente en 3 segundos...</p>
   </div>
   <script>
     setTimeout(function() {
-      window.location.href = '/chat?pending_connection=${encodeURIComponent(platformName.toLowerCase())}';
+      window.location.href = '/chat?pending_connection=${encodeURIComponent(platformKey)}';
     }, 3000);
   </script>
 </body>

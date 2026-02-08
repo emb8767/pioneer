@@ -195,13 +195,22 @@ export async function executeTool(
             }
           }
 
+          // Verificar si todas las imágenes se subieron a Late.dev (permanentes)
+          const allUploadedToLate = allImages.length > 0 && allImages.every(url => url.includes('media.getlate.dev'));
+          const someUploadedToLate = allImages.some(url => url.includes('media.getlate.dev'));
+
           const resultObj: Record<string, unknown> = {
             success: allImages.length > 0,
             images: allImages,
             model: input.model || 'schnell',
             cost_real: totalCostReal,
             cost_client: totalCostClient,
-            expires_in: '1 hora',
+            expires_in: allUploadedToLate
+              ? 'Permanente (almacenadas en Late.dev)'
+              : someUploadedToLate
+                ? 'Mixto: algunas permanentes, algunas expiran en 1 hora'
+                : '1 hora para URLs temporales (publicar pronto)',
+            uploaded_to_late: allUploadedToLate,
             total_requested: imageCount,
             total_generated: allImages.length,
             ...(errors.length > 0 && { errors }),

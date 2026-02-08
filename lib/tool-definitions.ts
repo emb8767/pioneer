@@ -114,7 +114,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_image',
     description:
-      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Devuelve URLs reales (https://replicate.delivery/...) que se usan en media_urls de publish_post. Las URLs expiran en 1 hora — publicar pronto. NO llames esta tool si ya generaste imágenes para este post — reutiliza las URLs existentes.',
+      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Las imágenes se suben automáticamente a Late.dev y devuelve URLs permanentes (https://media.getlate.dev/...) que se usan en media_urls de publish_post. Las URLs permanentes NO expiran. NO llames esta tool si ya generaste imágenes para este post — reutiliza las URLs existentes.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -147,7 +147,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'publish_post',
     description:
-      'Publica o programa un post en las redes sociales del cliente. DEBES llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Tres modos: (1) publish_now: true para publicar inmediatamente, (2) scheduled_for para fecha específica, (3) use_queue: true para agregar a la cola de publicación automática. Usar URLs reales de replicate.delivery obtenidas de generate_image.',
+      'Publica o programa un post en las redes sociales del cliente. DEBES llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Tres modos: (1) publish_now: true para publicar inmediatamente, (2) scheduled_for para fecha específica, (3) use_queue: true para agregar a la cola de publicación automática. Usar URLs de media.getlate.dev o replicate.delivery obtenidas de generate_image.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -206,7 +206,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'URLs de imágenes o videos a incluir en el post. Usar URLs reales de replicate.delivery obtenidas de generate_image.',
+            'URLs de imágenes o videos a incluir en el post. Usar URLs de media.getlate.dev o replicate.delivery obtenidas de generate_image.',
         },
         use_queue: {
           type: 'boolean',
