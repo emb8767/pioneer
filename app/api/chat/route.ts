@@ -14,7 +14,9 @@ const anthropic = new Anthropic({
 });
 
 // === DETECCIÓN DE ALUCINACIÓN DE PUBLICACIÓN ===
+// Detecta cuando Claude dice "publicado" o "programado" sin haber llamado publish_post
 const PUBLISH_HALLUCINATION_PATTERNS = [
+  // === "publicado" variants ===
   /publicado exitosamente/i,
   /publicado con éxito/i,
   /publicación exitosa/i,
@@ -24,6 +26,15 @@ const PUBLISH_HALLUCINATION_PATTERNS = [
   /fue publicado/i,
   /publicamos exitosamente/i,
   /published successfully/i,
+  // === "programado" variants (Bug 10.2 fix) ===
+  /programado exitosamente/i,
+  /programado con éxito/i,
+  /programación exitosa/i,
+  /✅.*programado/i,
+  /post programado para/i,
+  /se ha programado/i,
+  /fue programado/i,
+  /scheduled successfully/i,
 ];
 
 function detectPublishHallucination(text: string, publishPostCount: number): boolean {
@@ -98,12 +109,12 @@ export async function POST(request: NextRequest) {
       if (response.stop_reason === 'end_turn') {
         const fullText = finalTextParts.join('\n\n');
 
-        // Detección de alucinación de publicación
+        // Detección de alucinación de publicación/programación
         if (detectPublishHallucination(fullText, publishPostCount) && !hallucinationRetryUsed) {
-          console.warn('[Pioneer] ⚠️ ALUCINACIÓN DETECTADA: Claude dijo "publicado" sin llamar publish_post. Forzando retry.');
+          console.warn('[Pioneer] ⚠️ ALUCINACIÓN DETECTADA: Claude dijo "publicado/programado" sin llamar publish_post. Forzando retry.');
           hallucinationRetryUsed = true;
 
-          let correctiveMessage = 'ERROR DEL SISTEMA: No se ejecutó la publicación. Debes llamar la tool publish_post para publicar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.';
+          let correctiveMessage = 'ERROR DEL SISTEMA: No se ejecutó la publicación ni programación. Debes llamar la tool publish_post para publicar o programar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.';
 
           if (lastGeneratedImageUrls.length > 0) {
             correctiveMessage += ` IMPORTANTE: NO generes nuevas imágenes. Usa estas URLs que ya generaste: ${JSON.stringify(lastGeneratedImageUrls)}`;

@@ -36,6 +36,9 @@ export interface ToolResult {
   connectionOptionsToCache: Array<{ id: string; name: string }> | null;
 }
 
+// === DELAY HELPER ===
+const CAROUSEL_IMAGE_DELAY_MS = 10_000; // 10s entre imágenes — Replicate free plan: burst of 1
+
 // === EJECUTAR TOOLS — LLAMADAS DIRECTAS (sin fetch HTTP) ===
 
 export async function executeTool(
@@ -156,9 +159,10 @@ export async function executeTool(
 
         const imageCount = input.count && input.count > 1 ? Math.min(input.count, 10) : 0;
 
-        // === CARRUSEL: Generación paralela (Promise.all) ===
+        // === CARRUSEL: Generación secuencial con delay (Replicate free plan) ===
+        // NOTA: Cuando se tenga plan pagado de Replicate, cambiar a Promise.all (paralelo)
         if (imageCount > 1) {
-          console.log(`[Pioneer] Generando carrusel de ${imageCount} imágenes (paralelo)`);
+          console.log(`[Pioneer] Generando carrusel de ${imageCount} imágenes (secuencial, ${CAROUSEL_IMAGE_DELAY_MS / 1000}s delay)`);
 
           const allImages: string[] = [];
           let totalCostReal = 0;
@@ -166,31 +170,37 @@ export async function executeTool(
           let anyRegenerated = false;
           const errors: string[] = [];
 
-          const imagePromises = Array.from({ length: imageCount }, (_, i) => {
-            console.log(`[Pioneer] Lanzando generación de imagen ${i + 1}/${imageCount}...`);
-            return generateImage({
-              prompt: input.prompt,
-              model: (input.model as 'schnell' | 'pro') || 'schnell',
-              aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
-              num_outputs: 1,
-            }).catch(imgError => {
+          for (let i = 0; i < imageCount; i++) {
+            // Delay entre imágenes (no antes de la primera)
+            if (i > 0) {
+              console.log(`[Pioneer] Esperando ${CAROUSEL_IMAGE_DELAY_MS / 1000}s antes de imagen ${i + 1}/${imageCount}...`);
+              await new Promise(resolve => setTimeout(resolve, CAROUSEL_IMAGE_DELAY_MS));
+            }
+
+            console.log(`[Pioneer] Generando imagen ${i + 1}/${imageCount}...`);
+
+            try {
+              const result = await generateImage({
+                prompt: input.prompt,
+                model: (input.model as 'schnell' | 'pro') || 'schnell',
+                aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
+                num_outputs: 1,
+              });
+
+              if (result.success && result.images && result.images.length > 0) {
+                allImages.push(...result.images);
+                totalCostReal += result.cost_real;
+                totalCostClient += result.cost_client;
+                if (result.regenerated) anyRegenerated = true;
+                console.log(`[Pioneer] Imagen ${i + 1}/${imageCount} generada exitosamente.`);
+              } else {
+                const errorMsg = result.error || 'Error desconocido';
+                errors.push(`Imagen ${i + 1}: ${errorMsg}`);
+                console.error(`[Pioneer] Error en imagen ${i + 1}:`, errorMsg);
+              }
+            } catch (imgError) {
               console.error(`[Pioneer] Error en imagen ${i + 1}:`, imgError);
-              return { success: false, error: imgError instanceof Error ? imgError.message : 'Error desconocido' } as { success: false; error: string };
-            });
-          });
-
-          const results = await Promise.all(imagePromises);
-
-          for (let i = 0; i < results.length; i++) {
-            const result = results[i];
-            if (result.success && 'images' in result && result.images && result.images.length > 0) {
-              allImages.push(...result.images);
-              totalCostReal += result.cost_real;
-              totalCostClient += result.cost_client;
-              if (result.regenerated) anyRegenerated = true;
-            } else {
-              const errorMsg = 'error' in result ? result.error : 'Error desconocido';
-              errors.push(`Imagen ${i + 1}: ${errorMsg}`);
+              errors.push(`Imagen ${i + 1}: ${imgError instanceof Error ? imgError.message : 'Error desconocido'}`);
             }
           }
 
@@ -560,6 +570,7 @@ export async function executeTool(
               const pinOptions = pinResult.boards.map(b => ({
                 id: b.id,
                 name: b.name,
+                description: b.description || '',
               }));
               return {
                 result: JSON.stringify({
@@ -568,7 +579,7 @@ export async function executeTool(
                   step,
                   options_type: 'boards',
                   options: pinOptions,
-                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente para que elija uno.`,
+                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente.`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
@@ -594,6 +605,7 @@ export async function executeTool(
               const gbOptions = gbResult.locations.map(l => ({
                 id: l.id,
                 name: l.name,
+                address: l.address || '',
               }));
               return {
                 result: JSON.stringify({
