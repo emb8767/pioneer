@@ -8,7 +8,12 @@ interface Message {
 }
 
 // === RENDERIZAR CONTENIDO DEL MENSAJE ===
-// Parsea markdown básico: imágenes ![alt](url), bold **text**, y URLs de replicate.delivery
+// Parsea:
+// 1. Markdown images: ![alt](url) → <img>
+// 2. Bare replicate/image URLs → <img>
+// 3. Markdown links: [text](url) → <a>
+// 4. Bare URLs (https://...) → <a> clickable
+// 5. Bold: **text** → <strong>
 function MessageContent({ content }: { content: string }) {
   const parts: React.ReactNode[] = [];
   const lines = content.split('\n');
@@ -20,11 +25,13 @@ function MessageContent({ content }: { content: string }) {
       parts.push(<br key={`br-${lineIdx}`} />);
     }
 
-    // Regex para detectar patrones en la línea
-    // 1. Markdown images: ![alt](url)
-    // 2. Bare replicate URLs: https://replicate.delivery/...
-    // 3. Bold: **text**
-    const combinedRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)|(https:\/\/replicate\.delivery\/[^\s)]+)|\*\*([^*]+)\*\*/g;
+    // Combined regex — ORDER MATTERS (most specific first)
+    // Group 1,2: Markdown image ![alt](url)
+    // Group 3: Bare image URL (replicate.delivery or common image extensions)
+    // Group 4,5: Markdown link [text](url)
+    // Group 6: Bare URL (any https://...)
+    // Group 7: Bold **text**
+    const combinedRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)|(https:\/\/replicate\.delivery\/[^\s)]+|https?:\/\/[^\s)]+\.(?:webp|png|jpg|jpeg|gif))|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)]+)|\*\*([^*]+)\*\*/g;
 
     let lastIndex = 0;
     let match;
@@ -63,7 +70,7 @@ function MessageContent({ content }: { content: string }) {
           </span>
         );
       } else if (match[3]) {
-        // Bare replicate URL
+        // Bare image URL (replicate.delivery or image extension)
         const url = match[3];
         parts.push(
           <span key={`bareimg-${lineIdx}-${match.index}`} className="block my-3">
@@ -84,10 +91,37 @@ function MessageContent({ content }: { content: string }) {
             />
           </span>
         );
-      } else if (match[4]) {
+      } else if (match[4] && match[5]) {
+        // Markdown link: [text](url)
+        parts.push(
+          <a
+            key={`mdlink-${lineIdx}-${match.index}`}
+            href={match[5]}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline hover:text-blue-800 break-all"
+          >
+            {match[4]}
+          </a>
+        );
+      } else if (match[6]) {
+        // Bare URL — make clickable
+        const url = match[6];
+        parts.push(
+          <a
+            key={`link-${lineIdx}-${match.index}`}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline hover:text-blue-800 break-all"
+          >
+            {url}
+          </a>
+        );
+      } else if (match[7]) {
         // Bold text: **text**
         parts.push(
-          <strong key={`bold-${lineIdx}-${match.index}`}>{match[4]}</strong>
+          <strong key={`bold-${lineIdx}-${match.index}`}>{match[7]}</strong>
         );
       }
 
@@ -133,8 +167,6 @@ export default function ChatPage() {
   }, []);
 
   // === DETECTAR ?pending_connection EN LA URL ===
-  // Cuando el usuario regresa del OAuth headless, la URL tiene ?pending_connection=facebook
-  // Enviamos un mensaje automático para que Pioneer llame get_pending_connection
   useEffect(() => {
     if (pendingConnectionHandled) return;
 
@@ -144,23 +176,19 @@ export default function ChatPage() {
     if (pendingPlatform) {
       setPendingConnectionHandled(true);
 
-      // Limpiar el query param de la URL sin recargar la página
       const newUrl = window.location.pathname;
       window.history.replaceState({}, '', newUrl);
 
-      // Enviar mensaje automático después de que el componente se monte
       const platformName = getPlatformDisplayName(pendingPlatform);
       const autoMessage = `Acabo de autorizar ${platformName}.
 Necesito completar la conexión.`;
 
-      // Pequeño delay para que el chat esté listo
       setTimeout(() => {
         sendAutoMessage(autoMessage);
       }, 500);
     }
   }, [pendingConnectionHandled]);
 
-  // Función para enviar mensaje automático (sin input del usuario)
   const sendAutoMessage = async (messageText: string) => {
     if (isLoading) return;
 
@@ -169,7 +197,6 @@ Necesito completar la conexión.`;
     setIsLoading(true);
 
     try {
-      // Enviar SOLO el auto-message — no depender del state que puede estar stale
       const messagesToSend = [{ role: 'user', content: messageText }];
 
       const response = await fetch('/api/chat', {
@@ -209,7 +236,6 @@ Necesito completar la conexión.`;
     setIsLoading(true);
 
     try {
-      // Filtrar el mensaje de bienvenida para no enviarlo a la API
       const messagesToSend = newMessages.slice(1);
       
       const response = await fetch('/api/chat', {
@@ -313,7 +339,6 @@ Necesito completar la conexión.`;
   );
 }
 
-// Helper para nombres bonitos de plataformas
 function getPlatformDisplayName(platform: string): string {
   const names: Record<string, string> = {
     facebook: 'Facebook',
