@@ -208,14 +208,41 @@ Tienes 7 herramientas:
 7. **complete_connection** — Guardar la selección del cliente para completar una conexión headless. Llamar después de que el cliente elige una opción de get_pending_connection.
 
 Sobre imágenes:
-- Para incluir imagen en un post, PRIMERO llamar generate_image para obtener URL real
-- Usar esa URL real en media_urls de publish_post
-- Schnell es default ($0.015). Pro solo si el cliente pide mejor calidad ($0.275)
+- Para incluir imagen en un post, PRIMERO llamar generate_image para obtener URL(s) real(es)
+- Usar esas URLs reales en media_urls de publish_post
+- Schnell es default ($0.015/img). Pro solo si el cliente pide mejor calidad ($0.275/img)
 - Aspect ratio: Instagram 4:5, Facebook 1:1, Twitter 16:9, TikTok 9:16. Multi-plataforma: 1:1
 - Las URLs expiran en 1 hora — publicar pronto después de generar
 - Si el cliente quiere su propia foto: "La función de subir fotos estará disponible próximamente. Puedo generar una imagen AI o publicar solo con texto."
-- Si el resultado de generate_image incluye _note_for_pioneer con "regenerated", informa al cliente que la primera imagen no fue accesible y se regeneró, con el costo total actualizado.
-- NUNCA llames generate_image dos veces para el mismo post. Si ya generaste una imagen y el cliente la aprobó, usa esa misma URL en publish_post.
+- Si el resultado de generate_image incluye _note_for_pioneer con "regenerated", informa al cliente que alguna imagen no fue accesible y se regeneró, con el costo total actualizado.
+- NUNCA llames generate_image dos veces para el mismo post. Si ya generaste imágenes y el cliente las aprobó, usa esas mismas URLs en publish_post.
+
+=== CARRUSELES / MULTI-IMAGEN ===
+
+Como especialista de marketing, Pioneer decide cuántas imágenes son óptimas según el contenido:
+
+Cuándo recomendar carrusel (2-10 imágenes):
+- Catálogo/menú de productos: 3-6 imágenes (mostrar variedad)
+- Tour del negocio/detrás de escenas: 3-5 imágenes (diferentes ángulos)
+- Antes y después: 2 imágenes
+- Showcase de servicios: 3-4 imágenes (un servicio por imagen)
+- Evento o promoción especial: 3-5 imágenes (diferentes aspectos)
+- Testimonios visuales: 2-3 imágenes
+
+Cuándo usar imagen individual (1):
+- Oferta de un solo producto: 1 imagen hero
+- Post de branding simple: 1 imagen
+- Anuncio directo/urgencia: 1 imagen impactante
+- Post educativo: 1 imagen ilustrativa
+
+Reglas de carrusel:
+- Facebook soporta hasta 10 imágenes por post
+- Instagram soporta hasta 10 imágenes (carrusel nativo)
+- NO mezclar imágenes y video en el mismo post
+- Usar el parámetro count en generate_image (no llamar múltiples veces)
+- Informar al cliente el costo total: $0.015 × cantidad de imágenes
+- Presentar el plan con el número de imágenes y su justificación estratégica
+- Ejemplo: "Para mostrar su menú, recomiendo un carrusel de 4 imágenes: plato estrella, postres, bebidas y ambiente. Costo de imágenes: $0.06"
 
 === TIPOS DE CONTENIDO ===
 
@@ -371,7 +398,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_image',
     description:
-      'Genera una imagen con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Úsala cuando el cliente acepta tener una imagen AI, o cuando pide una imagen directamente. El prompt DEBE ser en inglés. Devuelve una URL real (https://replicate.delivery/...) que se puede usar en media_urls de publish_post. Las URLs expiran en 1 hora — publicar pronto después de generar. NO llames esta tool si ya generaste una imagen para este post — reutiliza la URL existente.',
+      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Devuelve URLs reales (https://replicate.delivery/...) que se usan en media_urls de publish_post. Las URLs expiran en 1 hora — publicar pronto. NO llames esta tool si ya generaste imágenes para este post — reutiliza las URLs existentes.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -384,7 +411,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           type: 'string',
           enum: ['schnell', 'pro'],
           description:
-            'Modelo a usar. schnell ($0.015) = rápido y económico (default). pro ($0.275) = mejor calidad.',
+            'Modelo a usar. schnell ($0.015/img) = rápido y económico (default). pro ($0.275/img) = mejor calidad.',
         },
         aspect_ratio: {
           type: 'string',
@@ -392,9 +419,10 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           description:
             'Proporción de la imagen. Usar 4:5 para Instagram, 1:1 para Facebook, 16:9 para Twitter, 9:16 para TikTok. Si es para múltiples plataformas, usar 1:1.',
         },
-        num_outputs: {
+        count: {
           type: 'number',
-          description: 'Número de imágenes a generar (1-4). Default: 1.',
+          description:
+            'Cantidad de imágenes a generar (1-10). Default 1. Para carruseles Facebook/Instagram usar 2-10. Costo: $0.015 × count (schnell) o $0.275 × count (pro).',
         },
       },
       required: ['prompt'],
@@ -761,7 +789,7 @@ async function executeTool(
   generateImageWasCalled: boolean,
   publishPostCount: number,
   hallucinationRetryUsed: boolean,
-  lastGeneratedImageUrl: string | null,
+  lastGeneratedImageUrls: string[],
   // OAuth headless context
   pendingOAuthData: OAuthPendingData | null,
   linkedInCachedData: Record<string, unknown> | null,
@@ -850,19 +878,19 @@ async function executeTool(
 
       case 'generate_image': {
         // === FIX BUG 8.1: Bloquear regeneración en retry de alucinación ===
-        if (hallucinationRetryUsed && lastGeneratedImageUrl) {
-          console.log(`[Pioneer] Reutilizando imagen existente en retry de alucinación: ${lastGeneratedImageUrl.substring(0, 80)}...`);
+        if (hallucinationRetryUsed && lastGeneratedImageUrls.length > 0) {
+          console.log(`[Pioneer] Reutilizando ${lastGeneratedImageUrls.length} imagen(es) existente(s) en retry de alucinación`);
           return {
             result: JSON.stringify({
               success: true,
-              images: [lastGeneratedImageUrl],
+              images: lastGeneratedImageUrls,
               model: 'cached',
               cost_real: 0,
               cost_client: 0,
               expires_in: '1 hora',
               regenerated: false,
               attempts: 0,
-              _note: 'Imagen reutilizada del intento anterior (no se generó una nueva)',
+              _note: 'Imagen(es) reutilizada(s) del intento anterior (no se generaron nuevas)',
             }),
             publishPostCalled: false,
             shouldClearOAuthCookie: false,
@@ -875,13 +903,85 @@ async function executeTool(
           prompt: string;
           model?: string;
           aspect_ratio?: string;
-          num_outputs?: number;
+          count?: number;
         };
+
+        const imageCount = Math.min(Math.max(input.count || 1, 1), 10);
+
+        // Para carruseles (count > 1): generar en paralelo con llamadas individuales
+        // FLUX schnell num_outputs solo genera variaciones del mismo prompt en 1 llamada
+        // Para carruseles queremos imágenes diferentes, así que hacemos N llamadas de 1
+        if (imageCount > 1) {
+          console.log(`[Pioneer] Generando carrusel: ${imageCount} imágenes en paralelo`);
+          const promises = Array.from({ length: imageCount }, () =>
+            generateImage({
+              prompt: input.prompt,
+              model: (input.model as 'schnell' | 'pro') || 'schnell',
+              aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
+              num_outputs: 1,
+            })
+          );
+
+          const results = await Promise.all(promises);
+
+          // Combinar resultados
+          const allImages: string[] = [];
+          let totalCostReal = 0;
+          let totalCostClient = 0;
+          let anyRegenerated = false;
+          let maxAttempts = 0;
+          const errors: string[] = [];
+
+          for (const r of results) {
+            totalCostReal += r.cost_real;
+            totalCostClient += r.cost_client;
+            if (r.regenerated) anyRegenerated = true;
+            if (r.attempts > maxAttempts) maxAttempts = r.attempts;
+            if (r.success && r.images.length > 0) {
+              allImages.push(...r.images);
+            } else if (r.error) {
+              errors.push(r.error);
+            }
+          }
+
+          const resultObj: Record<string, unknown> = {
+            success: allImages.length > 0,
+            images: allImages,
+            model: results[0]?.model || 'unknown',
+            cost_real: totalCostReal,
+            cost_client: totalCostClient,
+            expires_in: '1 hora (publicar pronto o descargar)',
+            regenerated: anyRegenerated,
+            attempts: maxAttempts,
+            total_requested: imageCount,
+            total_generated: allImages.length,
+          };
+
+          if (allImages.length < imageCount) {
+            resultObj._note_for_pioneer = `Se solicitaron ${imageCount} imágenes pero solo ${allImages.length} fueron generadas exitosamente. Costo total: $${totalCostClient.toFixed(3)}. Informa al cliente.`;
+          }
+          if (anyRegenerated) {
+            resultObj._note_for_pioneer = `Algunas imágenes necesitaron regeneración. Costo total: $${totalCostClient.toFixed(3)} (${imageCount} imágenes). Informa al cliente del costo actualizado.`;
+          }
+          if (errors.length > 0 && allImages.length === 0) {
+            resultObj.error = errors[0];
+          }
+
+          return {
+            result: JSON.stringify(resultObj),
+            publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
+            connectionOptionsToCache: null,
+          };
+        }
+
+        // Imagen individual (flujo original)
         const result = await generateImage({
           prompt: input.prompt,
           model: (input.model as 'schnell' | 'pro') || 'schnell',
           aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
-          num_outputs: input.num_outputs || 1,
+          num_outputs: 1,
         });
 
         // === NOTA PARA PIONEER: informar al cliente si hubo regeneración ===
@@ -923,10 +1023,10 @@ async function executeTool(
           media_urls?: string[];
         };
 
-        // === FIX BUG 8.1b: Inyectar imagen automáticamente en retry de alucinación ===
-        if (hallucinationRetryUsed && lastGeneratedImageUrl && (!input.media_urls || input.media_urls.length === 0)) {
-          console.log(`[Pioneer] Inyectando imagen guardada en publish_post durante retry: ${lastGeneratedImageUrl.substring(0, 80)}...`);
-          input.media_urls = [lastGeneratedImageUrl];
+        // === FIX BUG 8.1b: Inyectar imágenes automáticamente en retry de alucinación ===
+        if (hallucinationRetryUsed && lastGeneratedImageUrls.length > 0 && (!input.media_urls || input.media_urls.length === 0)) {
+          console.log(`[Pioneer] Inyectando ${lastGeneratedImageUrls.length} imagen(es) guardada(s) en publish_post durante retry`);
+          input.media_urls = lastGeneratedImageUrls;
         }
 
         // === NIVEL 1: VALIDACIÓN PREVENTIVA ===
@@ -1656,7 +1756,7 @@ export async function POST(request: NextRequest) {
 
     // === TRACKING ===
     let generateImageWasCalled = false;
-    let lastGeneratedImageUrl: string | null = null;
+    let lastGeneratedImageUrls: string[] = [];
     let publishPostCount = 0;
     let hallucinationRetryUsed = false;
     let shouldClearOAuthCookie = false;
@@ -1694,8 +1794,8 @@ export async function POST(request: NextRequest) {
 
           let correctiveMessage = 'ERROR DEL SISTEMA: No se ejecutó la publicación. Debes llamar la tool publish_post para publicar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.';
 
-          if (lastGeneratedImageUrl) {
-            correctiveMessage += ` IMPORTANTE: NO generes una nueva imagen. Usa esta URL que ya generaste: ${lastGeneratedImageUrl}`;
+          if (lastGeneratedImageUrls.length > 0) {
+            correctiveMessage += ` IMPORTANTE: NO generes nuevas imágenes. Usa estas URLs que ya generaste: ${JSON.stringify(lastGeneratedImageUrls)}`;
           }
 
           currentMessages = [
@@ -1765,18 +1865,18 @@ export async function POST(request: NextRequest) {
             generateImageWasCalled,
             publishPostCount,
             hallucinationRetryUsed,
-            lastGeneratedImageUrl,
+            lastGeneratedImageUrls,
             pendingOAuthData,
             linkedInCachedData,
             cachedConnectionOptions
           );
 
-          // Tracking: capturar URL de imagen para reutilizar en retry de alucinación
+          // Tracking: capturar URLs de imagen para reutilizar en retry de alucinación
           if (toolBlock.name === 'generate_image') {
             try {
               const parsed = JSON.parse(toolResult.result);
               if (parsed.success && parsed.images?.length > 0) {
-                lastGeneratedImageUrl = parsed.images[0];
+                lastGeneratedImageUrls = parsed.images;
               }
             } catch { /* ignore parse errors */ }
           }
