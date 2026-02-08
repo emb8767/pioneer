@@ -7,6 +7,8 @@ import type {
   LatePost,
   PublishRequest,
   Platform,
+  QueueSlot,
+  QueueNextSlotResponse,
 } from './types';
 
 const LATE_BASE_URL = 'https://getlate.dev/api/v1';
@@ -401,6 +403,65 @@ export async function deletePost(
   return lateRequest(`/posts/${postId}`, {
     method: 'DELETE',
   });
+}
+
+// === QUEUE (Late.dev) ===
+// Documentación: https://getlate.dev/queue-posts
+//
+// El Queue permite configurar horarios recurrentes semanales.
+// Cuando un post se envía con queuedFromProfile (sin scheduledFor),
+// Late.dev lo asigna automáticamente al próximo slot disponible.
+//
+// ⚠️ NUNCA llamar getQueueNextSlot() y usar ese tiempo en scheduledFor.
+//    Eso bypasea el queue y causa asignaciones duplicadas.
+//    Siempre usar queuedFromProfile en el POST /v1/posts directamente.
+
+/**
+ * Configura los horarios recurrentes del queue para un perfil.
+ * PUT /v1/queue/slots
+ * 
+ * @param profileId - ID del perfil en Late.dev
+ * @param timezone - Timezone del cliente (ej: "America/Puerto_Rico")
+ * @param slots - Array de { dayOfWeek: 0-6, time: "HH:MM" }
+ * @param active - Activar o desactivar el queue
+ */
+export async function setupQueueSlots(
+  profileId: string,
+  timezone: string,
+  slots: QueueSlot[],
+  active: boolean = true
+): Promise<unknown> {
+  return lateRequest('/queue/slots', {
+    method: 'PUT',
+    body: JSON.stringify({
+      profileId,
+      timezone,
+      slots,
+      active,
+    }),
+  });
+}
+
+/**
+ * Obtiene el próximo slot disponible del queue (solo informativo).
+ * GET /v1/queue/next-slot
+ * 
+ * ⚠️ NO usar este valor en scheduledFor — usar queuedFromProfile en createPost().
+ */
+export async function getQueueNextSlot(
+  profileId: string
+): Promise<QueueNextSlotResponse> {
+  return lateRequest(`/queue/next-slot?profileId=${profileId}`);
+}
+
+/**
+ * Obtiene la configuración actual del queue para un perfil.
+ * GET /v1/queue/slots
+ */
+export async function getQueueSlots(
+  profileId: string
+): Promise<unknown> {
+  return lateRequest(`/queue/slots?profileId=${profileId}`);
 }
 
 // === HELPERS ===

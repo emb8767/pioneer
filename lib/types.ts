@@ -88,6 +88,12 @@ export interface PublishRequest {
   timezone?: string;
   publishNow?: boolean;
   mediaItems?: LateMediaItem[];
+  // === Queue support (Late.dev) ===
+  // Cuando se proporciona queuedFromProfile (sin scheduledFor),
+  // Late.dev asigna automáticamente el próximo slot disponible.
+  // NUNCA combinar con scheduledFor — eso bypasea el queue.
+  queuedFromProfile?: string;
+  queueId?: string;
 }
 
 export interface LatePost {
@@ -100,6 +106,26 @@ export interface LatePost {
     accountId: string;
     status: 'pending' | 'published' | 'failed';
   }>;
+}
+
+// === QUEUE (Late.dev) ===
+
+export interface QueueSlot {
+  dayOfWeek: number; // 0=domingo, 1=lunes, ..., 6=sábado
+  time: string;      // formato "HH:MM" (ej: "12:00", "19:00")
+}
+
+export interface QueueConfig {
+  profileId: string;
+  timezone: string;
+  slots: QueueSlot[];
+  active: boolean;
+}
+
+export interface QueueNextSlotResponse {
+  profileId: string;
+  nextSlot: string;   // ISO datetime
+  timezone: string;
 }
 
 // === CHAT ===

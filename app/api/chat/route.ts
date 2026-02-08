@@ -25,6 +25,9 @@ import {
   getGoogleBusinessLocations,
   saveGoogleBusinessLocation,
   saveSnapchatProfile,
+  // Queue functions
+  setupQueueSlots,
+  getQueueNextSlot,
 } from '@/lib/late-client';
 import { generateContent, PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
 import { generateImage, suggestAspectRatio, buildImagePrompt } from '@/lib/replicate-client';
@@ -193,15 +196,16 @@ Estas plataformas requieren un paso adicional de selección (página, organizaci
 
 === TOOLS ===
 
-Tienes 7 herramientas:
+Tienes 9 herramientas:
 
 1. **list_connected_accounts** — Verificar redes conectadas. Usar ANTES de proponer plan o publicar.
 2. **generate_connect_url** — Generar enlace OAuth para conectar red social. Para plataformas headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat), el modo headless se activa automáticamente.
 3. **generate_content** — Generar texto de post por plataforma. Usar después de aprobación del plan.
 4. **generate_image** — Generar imagen AI (FLUX). Prompt en INGLÉS. Devuelve URL real (https://replicate.delivery/...). Incluir "no text overlay" en prompt.
-5. **publish_post** — Publicar o programar post. DEBES llamar esta tool para publicar. NUNCA confirmes publicación sin haberla llamado.
+5. **publish_post** — Publicar o programar post. DEBES llamar esta tool para publicar. NUNCA confirmes publicación sin haberla llamado. Tres modos: publish_now (inmediato), scheduled_for (fecha específica), use_queue (cola automática).
 6. **get_pending_connection** — Obtener opciones de selección para conexión headless (páginas de Facebook, organizaciones de LinkedIn, boards de Pinterest, ubicaciones de Google Business, perfiles de Snapchat). Llamar INMEDIATAMENTE cuando el cliente regresa de autorizar una plataforma headless.
 7. **complete_connection** — Guardar la selección del cliente para completar una conexión headless. Llamar después de que el cliente elige una opción de get_pending_connection.
+8. **setup_queue** — Configurar horarios recurrentes de publicación para el cliente. Úsala cuando el plan se aprueba para definir los días y horarios de publicación automática (ej: lunes, miércoles y viernes a las 12pm). Solo necesitas configurarla una vez por plan.
 
 Sobre imágenes:
 - Para incluir imagen en un post, PRIMERO llamar generate_image para obtener URL(s) real(es)
@@ -220,6 +224,21 @@ Pioneer decide cuántas imágenes según el skill de marketing. Reglas técnicas
 - NO mezclar imágenes y video en el mismo post
 - Usar el parámetro count en generate_image (no llamar múltiples veces)
 - Costo: $0.015 × cantidad de imágenes
+
+=== COLA DE PUBLICACIÓN (QUEUE) ===
+
+Cuando el cliente aprueba un plan con múltiples posts programados:
+1. PRIMERO: Llama setup_queue para configurar los horarios de publicación del plan
+2. DESPUÉS: Para cada post del plan, usa publish_post con use_queue: true (en vez de scheduled_for)
+3. Late.dev asigna automáticamente cada post al próximo horario disponible
+
+El queue se configura UNA VEZ por plan. Los horarios se repiten semanalmente.
+Ejemplo: Si el plan tiene 3 posts/semana → configura lunes 12pm, miércoles 7pm, viernes 12pm.
+
+Para publicaciones inmediatas ("publícalo ahora"), sigue usando publish_post con publish_now: true.
+El queue NO se usa para publicaciones inmediatas.
+
+Profile ID de Pioneer en Late.dev: 6984c371b984889d86a8b3d6
 
 === REGLAS DE CONTENIDO ===
 
@@ -253,26 +272,15 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
         platform: {
           type: 'string',
           enum: [
-            'facebook',
-            'instagram',
-            'twitter',
-            'linkedin',
-            'tiktok',
-            'youtube',
-            'pinterest',
-            'reddit',
-            'bluesky',
-            'threads',
-            'googlebusiness',
-            'telegram',
-            'snapchat',
+            'facebook', 'instagram', 'linkedin', 'twitter', 'tiktok',
+            'youtube', 'threads', 'reddit', 'pinterest', 'bluesky',
+            'googlebusiness', 'telegram', 'snapchat',
           ],
           description: 'La plataforma de red social a conectar',
         },
         profile_id: {
           type: 'string',
-          description:
-            'El ID del perfil en Late.dev. Usar: 6984c371b984889d86a8b3d6',
+          description: 'ID del perfil del cliente en Late.dev (default: 6984c371b984889d86a8b3d6)',
         },
       },
       required: ['platform', 'profile_id'],
@@ -281,17 +289,17 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_content',
     description:
-      'Genera el texto de un post para redes sociales, adaptado a cada plataforma. El texto debe ser BREVE (3-5 líneas + CTA + hashtags). Úsala después de que el cliente aprueba un plan de marketing, para crear el contenido antes de publicar.',
+      'Genera texto de post optimizado para redes sociales. SIEMPRE usar esta tool — NUNCA generar texto manualmente.',
     input_schema: {
       type: 'object' as const,
       properties: {
         business_name: {
           type: 'string',
-          description: 'Nombre del negocio del cliente',
+          description: 'Nombre del negocio',
         },
         business_type: {
           type: 'string',
-          description: 'Tipo de negocio (restaurante, tienda, salón, etc.)',
+          description: 'Tipo de negocio (ej: panadería, gomera, restaurante)',
         },
         post_type: {
           type: 'string',
@@ -389,7 +397,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'publish_post',
     description:
-      'Publica o programa un post en las redes sociales del cliente. DEBES llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Puede publicar inmediatamente (publish_now: true) o programar para una fecha futura (scheduled_for). Usar URLs reales de replicate.delivery obtenidas de generate_image.',
+      'Publica o programa un post en las redes sociales del cliente. DEBES llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Tres modos: (1) publish_now: true para publicar inmediatamente, (2) scheduled_for para fecha específica, (3) use_queue: true para agregar a la cola de publicación automática. Usar URLs reales de replicate.delivery obtenidas de generate_image.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -433,7 +441,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
         publish_now: {
           type: 'boolean',
           description:
-            'Si es true, publica inmediatamente. Si es false, debe proporcionar scheduled_for.',
+            'Si es true, publica inmediatamente. Si es false, debe proporcionar scheduled_for o use_queue.',
         },
         scheduled_for: {
           type: 'string',
@@ -450,11 +458,20 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           description:
             'URLs de imágenes o videos a incluir en el post. Usar URLs reales de replicate.delivery obtenidas de generate_image.',
         },
+        use_queue: {
+          type: 'boolean',
+          description:
+            'Si es true, agrega el post a la cola de publicación en vez de publicar ahora o programar para fecha específica. Late.dev asigna automáticamente el próximo horario disponible del queue. Usar para posts de planes aprobados. NO combinar con publish_now o scheduled_for.',
+        },
+        queue_profile_id: {
+          type: 'string',
+          description: 'ID del perfil para el queue. Default: 6984c371b984889d86a8b3d6',
+        },
       },
       required: ['content', 'platforms'],
     },
   },
-  // === NUEVAS TOOLS: OAuth Headless ===
+  // === TOOLS: OAuth Headless ===
   {
     name: 'get_pending_connection',
     description:
@@ -508,6 +525,40 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
       required: ['platform', 'selection_id'],
     },
   },
+  // === TOOL: Queue ===
+  {
+    name: 'setup_queue',
+    description:
+      'Configura los horarios recurrentes de publicación para el cliente. Úsala después de que el plan es aprobado para definir los días y horas en que se publicarán los posts automáticamente. Los horarios se repiten semanalmente. Solo necesita configurarse una vez por plan.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slots: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              day_of_week: {
+                type: 'number',
+                description: 'Día de la semana: 0=domingo, 1=lunes, 2=martes, 3=miércoles, 4=jueves, 5=viernes, 6=sábado',
+              },
+              time: {
+                type: 'string',
+                description: 'Hora en formato HH:MM (ej: "12:00", "19:00")',
+              },
+            },
+            required: ['day_of_week', 'time'],
+          },
+          description: 'Lista de horarios semanales de publicación. Ejemplo: [{"day_of_week": 1, "time": "12:00"}, {"day_of_week": 3, "time": "19:00"}]',
+        },
+        profile_id: {
+          type: 'string',
+          description: 'ID del perfil en Late.dev. Default: 6984c371b984889d86a8b3d6',
+        },
+      },
+      required: ['slots'],
+    },
+  },
 ];
 
 // === LIMPIAR MARKDOWN Y FORMATO PARA REDES SOCIALES ===
@@ -537,6 +588,7 @@ interface ValidatedPublishData {
   scheduledFor?: string;
   timezone?: string;
   mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
+  queuedFromProfile?: string;
 }
 
 interface ValidationResult {
@@ -554,6 +606,8 @@ async function validateAndPreparePublish(
     scheduled_for?: string;
     timezone?: string;
     media_urls?: string[];
+    use_queue?: boolean;
+    queue_profile_id?: string;
   },
   generateImageWasCalled: boolean
 ): Promise<ValidationResult> {
@@ -680,7 +734,11 @@ async function validateAndPreparePublish(
     platforms: validatedPlatforms,
   };
 
-  if (input.publish_now) {
+  // Modo queue: agregar a la cola de publicación
+  if (input.use_queue) {
+    publishData.queuedFromProfile = input.queue_profile_id || '6984c371b984889d86a8b3d6';
+    // NO agregar publishNow ni scheduledFor — Late.dev asigna el slot
+  } else if (input.publish_now) {
     publishData.publishNow = true;
   } else if (input.scheduled_for) {
     publishData.scheduledFor = input.scheduled_for;
@@ -911,9 +969,10 @@ async function executeTool(
 
         const imageCount = input.count && input.count > 1 ? Math.min(input.count, 10) : 0;
 
-        // === CARRUSEL: Generación secuencial con delay ===
+        // === CARRUSEL: Generación paralela (Promise.all) ===
+        // Replicate pagado: 10 predictions/s, burst hasta 600/s — no necesita delay
         if (imageCount > 1) {
-          console.log(`[Pioneer] Generando carrusel de ${imageCount} imágenes (secuencial, 10s delay)`);
+          console.log(`[Pioneer] Generando carrusel de ${imageCount} imágenes (paralelo)`);
 
           const allImages: string[] = [];
           let totalCostReal = 0;
@@ -921,33 +980,31 @@ async function executeTool(
           let anyRegenerated = false;
           const errors: string[] = [];
 
-          for (let i = 0; i < imageCount; i++) {
-            try {
-              // Delay entre imágenes (excepto la primera)
-              if (i > 0) {
-                console.log(`[Pioneer] Esperando 10s antes de imagen ${i + 1}/${imageCount}...`);
-                await new Promise((resolve) => setTimeout(resolve, 10000));
-              }
-
-              console.log(`[Pioneer] Generando imagen ${i + 1}/${imageCount}...`);
-              const result = await generateImage({
-                prompt: input.prompt,
-                model: (input.model as 'schnell' | 'pro') || 'schnell',
-                aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
-                num_outputs: 1,
-              });
-
-              if (result.success && result.images && result.images.length > 0) {
-                allImages.push(...result.images);
-                totalCostReal += result.cost_real;
-                totalCostClient += result.cost_client;
-                if (result.regenerated) anyRegenerated = true;
-              } else {
-                errors.push(`Imagen ${i + 1}: ${result.error || 'Error desconocido'}`);
-              }
-            } catch (imgError) {
+          const imagePromises = Array.from({ length: imageCount }, (_, i) => {
+            console.log(`[Pioneer] Lanzando generación de imagen ${i + 1}/${imageCount}...`);
+            return generateImage({
+              prompt: input.prompt,
+              model: (input.model as 'schnell' | 'pro') || 'schnell',
+              aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
+              num_outputs: 1,
+            }).catch(imgError => {
               console.error(`[Pioneer] Error en imagen ${i + 1}:`, imgError);
-              errors.push(`Imagen ${i + 1}: ${imgError instanceof Error ? imgError.message : 'Error desconocido'}`);
+              return { success: false, error: imgError instanceof Error ? imgError.message : 'Error desconocido' } as { success: false; error: string };
+            });
+          });
+
+          const results = await Promise.all(imagePromises);
+
+          for (let i = 0; i < results.length; i++) {
+            const result = results[i];
+            if (result.success && 'images' in result && result.images && result.images.length > 0) {
+              allImages.push(...result.images);
+              totalCostReal += result.cost_real;
+              totalCostClient += result.cost_client;
+              if (result.regenerated) anyRegenerated = true;
+            } else {
+              const errorMsg = 'error' in result ? result.error : 'Error desconocido';
+              errors.push(`Imagen ${i + 1}: ${errorMsg}`);
             }
           }
 
@@ -1027,6 +1084,8 @@ async function executeTool(
           scheduled_for?: string;
           timezone?: string;
           media_urls?: string[];
+          use_queue?: boolean;
+          queue_profile_id?: string;
         };
 
         // === FIX BUG 8.1b: Inyectar imágenes automáticamente en retry de alucinación ===
@@ -1069,6 +1128,8 @@ async function executeTool(
           let successMessage: string;
           if (wasAutoRescheduled && rescheduledFor) {
             successMessage = `La plataforma indicó "posting too fast". El post fue auto-reprogramado para ${rescheduledFor} (en ~30 minutos). No se requiere acción del cliente.`;
+          } else if (validation.data.queuedFromProfile) {
+            successMessage = `Post agregado a la cola de publicación. Se publicará automáticamente en el próximo horario disponible.`;
           } else if (validation.data.publishNow) {
             successMessage = 'Post publicado exitosamente';
           } else {
@@ -1084,6 +1145,10 @@ async function executeTool(
               ...(wasAutoRescheduled && {
                 auto_rescheduled: true,
                 rescheduled_for: rescheduledFor,
+              }),
+              ...(validation.data.queuedFromProfile && {
+                queued: true,
+                queue_profile_id: validation.data.queuedFromProfile,
               }),
               ...(validation.data.scheduledFor && !wasAutoRescheduled && {
                 scheduledFor: validation.data.scheduledFor,
@@ -1123,8 +1188,70 @@ async function executeTool(
         }
       }
 
+      // === TOOL: Queue ===
+
+      case 'setup_queue': {
+        const input = toolInput as {
+          slots: Array<{ day_of_week: number; time: string }>;
+          profile_id?: string;
+        };
+
+        const profileId = input.profile_id || '6984c371b984889d86a8b3d6';
+
+        try {
+          const formattedSlots = input.slots.map(s => ({
+            dayOfWeek: s.day_of_week,
+            time: s.time,
+          }));
+
+          await setupQueueSlots(profileId, PR_TIMEZONE, formattedSlots, true);
+
+          // Obtener próximo slot para informar al cliente
+          let nextSlotInfo = '';
+          try {
+            const nextSlot = await getQueueNextSlot(profileId);
+            nextSlotInfo = ` Próximo horario disponible: ${nextSlot.nextSlot}`;
+          } catch {
+            // No-op: info opcional
+          }
+
+          const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+          const slotDescriptions = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`);
+
+          return {
+            result: JSON.stringify({
+              success: true,
+              message: `Cola de publicación configurada: ${slotDescriptions.join(', ')}.${nextSlotInfo}`,
+              slots: formattedSlots,
+              timezone: PR_TIMEZONE,
+              profile_id: profileId,
+            }),
+            publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
+            connectionOptionsToCache: null,
+          };
+        } catch (error) {
+          console.error('[Pioneer] Error configurando queue:', error);
+          const errorMessage = error instanceof LateApiError
+            ? `Error de Late.dev (HTTP ${error.status}): ${error.body}`
+            : error instanceof Error ? error.message : 'Error desconocido';
+
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: `Error configurando cola de publicación: ${errorMessage}`,
+            }),
+            publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
+            connectionOptionsToCache: null,
+          };
+        }
+      }
+
       // ============================================================
-      // === NUEVAS TOOLS: OAuth Headless ===
+      // === TOOLS: OAuth Headless ===
       // ============================================================
 
       case 'get_pending_connection': {
@@ -1178,90 +1305,57 @@ async function executeTool(
                   step,
                   options_type: 'pages',
                   options: fbOptions,
-                  message: `Se encontraron ${fbResult.pages.length} página(s) de Facebook. Muestre las opciones al cliente para que elija una. IMPORTANTE: Cuando llame complete_connection, use EXACTAMENTE el "id" de la opción seleccionada.`,
+                  message: `Se encontraron ${fbResult.pages.length} página(s) de Facebook. Muestre las opciones al cliente para que elija una.`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
-                connectionOptionsToCache: fbOptions.map(o => ({ id: o.id, name: o.name })),
+                connectionOptionsToCache: fbOptions,
               };
             }
 
             case 'linkedin': {
               if (!pendingDataToken) {
-                // Sin pendingDataToken = se conectó directamente como personal
                 return {
                   result: JSON.stringify({
-                    success: true,
-                    platform,
-                    step: 'direct_connect',
-                    options_type: 'none',
-                    options: [],
-                    message: 'La cuenta de LinkedIn se conectó directamente como cuenta personal (sin organizaciones disponibles). La conexión está completa.',
+                    success: false,
+                    error: 'Falta pendingDataToken para LinkedIn. El cliente debe intentar conectar de nuevo.',
                   }),
                   publishPostCalled: false,
-                  shouldClearOAuthCookie: true,
+                  shouldClearOAuthCookie: false,
                   linkedInDataToCache: null,
                   connectionOptionsToCache: null,
                 };
               }
-
-              const linkedInData = await getLinkedInPendingData(pendingDataToken);
-
-              if (!linkedInData.organizations || linkedInData.organizations.length === 0) {
-                // No tiene organizaciones → conectar como personal automáticamente
-                if (connectToken) {
-                  await saveLinkedInOrganization(
-                    profileId,
-                    linkedInData.tempToken,
-                    linkedInData.userProfile as Record<string, unknown>,
-                    'personal',
-                    connectToken
-                  );
-                }
-                return {
-                  result: JSON.stringify({
-                    success: true,
-                    platform,
-                    step: 'auto_connected',
-                    options_type: 'none',
-                    options: [],
-                    message: `LinkedIn conectado como cuenta personal de ${linkedInData.userProfile.displayName}. No se encontraron organizaciones.`,
-                    connected: true,
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: true,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
-              }
-
-              // Tiene organizaciones → mostrar opciones al cliente
-              const liOptions = [
-                { id: 'personal', name: `Cuenta personal (${linkedInData.userProfile.displayName})` },
-                ...linkedInData.organizations.map(o => ({ id: o.id, name: o.name })),
+              const liResult = await getLinkedInPendingData(pendingDataToken);
+              const liOptions: Array<{ id: string; name: string }> = [
+                { id: 'personal', name: `Cuenta personal de ${liResult.userProfile.displayName}` },
               ];
-
+              if (liResult.organizations) {
+                for (const org of liResult.organizations) {
+                  liOptions.push({ id: org.id, name: org.name });
+                }
+              }
               return {
                 result: JSON.stringify({
                   success: true,
                   platform,
                   step,
-                  options_type: 'organizations',
+                  options_type: 'accounts',
                   options: liOptions,
-                  message: `Se encontraron ${linkedInData.organizations.length} organización(es) de LinkedIn, más la opción de cuenta personal. IMPORTANTE: Cuando llame complete_connection, DEBE incluir _linkedin_data tal cual se devuelve aquí.`,
+                  message: `Se encontraron ${liOptions.length} opción(es) de LinkedIn. Muestre las opciones al cliente para que elija una.`,
                   _linkedin_data: {
-                    tempToken: linkedInData.tempToken,
-                    userProfile: linkedInData.userProfile,
-                    organizations: linkedInData.organizations,
+                    tempToken: liResult.tempToken,
+                    userProfile: liResult.userProfile,
+                    organizations: liResult.organizations || [],
                   },
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: {
-                  tempToken: linkedInData.tempToken,
-                  userProfile: linkedInData.userProfile,
-                  organizations: linkedInData.organizations,
+                  tempToken: liResult.tempToken,
+                  userProfile: liResult.userProfile,
+                  organizations: liResult.organizations || [],
                 },
                 connectionOptionsToCache: liOptions,
               };
@@ -1292,7 +1386,7 @@ async function executeTool(
                   step,
                   options_type: 'boards',
                   options: pinOptions,
-                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest.`,
+                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente para que elija uno.`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
@@ -1326,7 +1420,7 @@ async function executeTool(
                   step,
                   options_type: 'locations',
                   options: gbOptions,
-                  message: `Se encontraron ${gbResult.locations.length} ubicación(es) de Google Business.`,
+                  message: `Se encontraron ${gbResult.locations.length} ubicación(es) de Google Business. Muestre las opciones al cliente.`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
@@ -1336,7 +1430,6 @@ async function executeTool(
             }
 
             case 'snapchat': {
-              // Snapchat: guardar perfil público directamente
               if (!tempToken || !connectToken) {
                 return {
                   result: JSON.stringify({
@@ -1742,7 +1835,7 @@ export async function POST(request: NextRequest) {
       console.log(`[Pioneer] Cookies en request (${allCookies.length}):`, allCookies.map(c => c.name));
       
       pendingOAuthData = getOAuthCookie(request);
-      console.log(`[Pioneer] OAuth cookie leída:`, pendingOAuthData ? 
+      console.log(`[Pioneer] OAuth cookie leída:`, pendingOAuthData ?
         `platform=${pendingOAuthData.platform}, step=${pendingOAuthData.step}` : 'null');
     } catch (error) {
       console.warn('[Pioneer] No se pudo leer OAuth cookie:', error);
