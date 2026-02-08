@@ -1352,6 +1352,33 @@ async function executeTool(
                   connectionOptionsToCache: null,
                 };
               }
+
+              // === VALIDACIÓN: Re-fetch pages para verificar/corregir el selection_id ===
+              // Claude frecuentemente alucina page IDs — verificamos contra Late.dev
+              try {
+                const pagesCheck = await getFacebookPages(profileId, tempToken, connectToken);
+                const realPages = pagesCheck.pages;
+                const exactMatch = realPages.find(p => p.id === selection_id);
+
+                if (!exactMatch && realPages.length > 0) {
+                  const nameMatch = selection_name
+                    ? realPages.find(p => p.name.toLowerCase() === (selection_name || '').toLowerCase())
+                    : null;
+
+                  if (nameMatch) {
+                    console.warn(`[Pioneer] ⚠️ CORRECCIÓN FB: ID "${selection_id}" → "${nameMatch.id}" (match por nombre "${nameMatch.name}")`);
+                    selection_id = nameMatch.id;
+                  } else if (realPages.length === 1) {
+                    console.warn(`[Pioneer] ⚠️ CORRECCIÓN FB: ID "${selection_id}" → "${realPages[0].id}" (única página: "${realPages[0].name}")`);
+                    selection_id = realPages[0].id;
+                  } else {
+                    console.warn(`[Pioneer] ⚠️ Page ID "${selection_id}" no encontrado. Pages: ${JSON.stringify(realPages.map(p => ({ id: p.id, name: p.name })))}`);
+                  }
+                }
+              } catch (fetchErr) {
+                console.warn('[Pioneer] No se pudieron re-fetch pages para validación:', fetchErr);
+              }
+
               await saveFacebookPage(profileId, selection_id, tempToken, userProfile, connectToken);
               return {
                 result: JSON.stringify({
