@@ -64,13 +64,12 @@ export default function ChatPage() {
     if (isLoading) return;
 
     const userMessage: Message = { role: 'user', content: messageText };
-    const newMessages = [...messages, userMessage];
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
-      // Filtrar el mensaje de bienvenida para no enviarlo a la API
-      const messagesToSend = newMessages.slice(1);
+      // Enviar SOLO el auto-message — no depender del state que puede estar stale
+      const messagesToSend = [{ role: 'user', content: messageText }];
 
       const response = await fetch('/api/chat', {
         method: 'POST',
