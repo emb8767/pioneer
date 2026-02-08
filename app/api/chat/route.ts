@@ -945,13 +945,6 @@ export async function POST(request: NextRequest) {
           // Tracking: marcar si generate_image fue llamada
           if (toolBlock.name === 'generate_image') {
             generateImageWasCalled = true;
-            // Capturar la URL de la imagen para reutilizar en retry de alucinación
-            try {
-              const parsed = JSON.parse(result);
-              if (parsed.success && parsed.images?.length > 0) {
-                lastGeneratedImageUrl = parsed.images[0];
-              }
-            } catch { /* ignore parse errors */ }
           }
 
           const { result, publishPostCalled } = await executeTool(
@@ -960,6 +953,16 @@ export async function POST(request: NextRequest) {
             generateImageWasCalled,
             publishPostCount
           );
+
+          // Tracking: capturar URL de imagen para reutilizar en retry de alucinación
+          if (toolBlock.name === 'generate_image') {
+            try {
+              const parsed = JSON.parse(result);
+              if (parsed.success && parsed.images?.length > 0) {
+                lastGeneratedImageUrl = parsed.images[0];
+              }
+            } catch { /* ignore parse errors */ }
+          }
 
           // Tracking: contar publish_post EXITOSOS (no intentos fallidos)
           if (publishPostCalled) {
