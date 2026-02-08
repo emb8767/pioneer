@@ -10,9 +10,13 @@
 // VALIDACIÓN: Después de generar, hacemos GET parcial (Range: bytes=0-0) a la URL
 // para verificar que es accesible. HEAD puede dar falsos positivos en Cloudflare CDN.
 // Si falla, regeneramos automáticamente (max 1 retry).
+//
+// MEDIA UPLOAD: Después de validar URLs, sube imágenes a Late.dev via presigned URLs
+// para obtener URLs permanentes (media.getlate.dev) que no expiran.
 
 import Replicate from 'replicate';
 import type { Platform } from './types';
+import { uploadAllToLateMedia } from './media-uploader';
 
 // === TIPOS ===
 
@@ -32,13 +36,14 @@ export interface GenerateImageInput {
 
 export interface GenerateImageResult {
   success: boolean;
-  images: string[];        // URLs directas (http/https, no FileOutput)
+  images: string[];        // URLs permanentes (media.getlate.dev) o temporales (replicate.delivery) como fallback
   model: string;
   cost_real: number;       // Costo real de Replicate (acumulado si hubo retry)
   cost_client: number;     // Costo con markup 500% (acumulado si hubo retry)
-  expires_in: string;      // Recordatorio de expiración
+  expires_in: string;      // Info de expiración
   regenerated: boolean;    // true si la primera URL falló y se regeneró
   attempts: number;        // Número de intentos (1 = éxito directo, 2 = regeneración)
+  uploaded_to_late: boolean; // true si las imágenes se subieron a Late.dev (permanentes)
   error?: string;
 }
 
@@ -190,7 +195,7 @@ async function generateOnce(
   return images;
 }
 
-// === GENERAR IMAGEN (con validación + auto-retry) ===
+// === GENERAR IMAGEN (con validación + auto-retry + media upload) ===
 
 /**
  * Genera una o más imágenes con FLUX via Replicate.
@@ -201,9 +206,8 @@ async function generateOnce(
  * 3. Hace GET parcial (Range: bytes=0-0) para validar que la URL es accesible
  * 4. Verifica content-type (descarta respuestas HTML/JSON de error)
  * 5. Si la URL falla validación, regenera automáticamente (max 1 retry)
- * 6. Devuelve resultado con campos regenerated/attempts/cost_client acumulados
- *
- * Las URLs de output expiran en ~1 hora.
+ * 6. Sube imágenes válidas a Late.dev via presigned URLs → URLs permanentes
+ * 7. Devuelve resultado con URLs permanentes (o temporales como fallback)
  */
 export async function generateImage(
   input: GenerateImageInput
@@ -244,6 +248,7 @@ export async function generateImage(
           expires_in: '',
           regenerated,
           attempts,
+          uploaded_to_late: false,
           error: 'No se generaron imágenes después de múltiples intentos. Intente con un prompt diferente.',
         };
       }
@@ -272,15 +277,28 @@ export async function generateImage(
 
         console.log(`[Pioneer] Imagen generada exitosamente. URLs válidas: ${validImages.length}/${images.length}. Intentos: ${attempts}. Costo cliente: $${totalCostClient.toFixed(3)}`);
 
+        // === MEDIA UPLOAD: Subir a Late.dev para URLs permanentes ===
+        console.log(`[Pioneer] Subiendo ${validImages.length} imagen(es) a Late.dev para URLs permanentes...`);
+        const permanentUrls = await uploadAllToLateMedia(validImages);
+        const uploadedCount = permanentUrls.filter(url => url.includes('media.getlate.dev')).length;
+        const allUploaded = uploadedCount === permanentUrls.length;
+
+        if (allUploaded) {
+          console.log(`[Pioneer] Todas las imágenes subidas a Late.dev exitosamente (${uploadedCount}/${permanentUrls.length})`);
+        } else {
+          console.warn(`[Pioneer] Upload parcial a Late.dev: ${uploadedCount}/${permanentUrls.length} (las restantes usan URL temporal de Replicate)`);
+        }
+
         return {
           success: true,
-          images: validImages,
+          images: permanentUrls,
           model: modelId,
           cost_real: totalCostReal,
           cost_client: totalCostClient,
-          expires_in: '1 hora (publicar pronto o descargar)',
+          expires_in: allUploaded ? 'Permanente (almacenadas en Late.dev)' : '1 hora para URLs temporales (publicar pronto)',
           regenerated,
           attempts,
+          uploaded_to_late: allUploaded,
         };
       }
 
@@ -305,6 +323,7 @@ export async function generateImage(
         expires_in: '',
         regenerated: true,
         attempts,
+        uploaded_to_late: false,
         error: 'Las imágenes generadas no fueron accesibles (URLs inválidas después de verificación). Intente de nuevo.',
       };
     }
@@ -319,6 +338,7 @@ export async function generateImage(
       expires_in: '',
       regenerated,
       attempts,
+      uploaded_to_late: false,
       error: 'Error inesperado en la generación de imagen.',
     };
   } catch (error) {
@@ -336,6 +356,7 @@ export async function generateImage(
       expires_in: '',
       regenerated,
       attempts,
+      uploaded_to_late: false,
       error: errorMessage,
     };
   }

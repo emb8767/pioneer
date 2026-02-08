@@ -10,7 +10,7 @@ interface Message {
 // === RENDERIZAR CONTENIDO DEL MENSAJE ===
 // Parsea:
 // 1. Markdown images: ![alt](url) → <img>
-// 2. Bare replicate/image URLs → <img>
+// 2. Bare replicate/late.dev/image URLs → <img>
 // 3. Markdown links: [text](url) → <a>
 // 4. Bare URLs (https://...) → <a> clickable
 // 5. Bold: **text** → <strong>
@@ -27,11 +27,11 @@ function MessageContent({ content }: { content: string }) {
 
     // Combined regex — ORDER MATTERS (most specific first)
     // Group 1,2: Markdown image ![alt](url)
-    // Group 3: Bare image URL (replicate.delivery or common image extensions)
+    // Group 3: Bare image URL (replicate.delivery, media.getlate.dev, or common image extensions)
     // Group 4,5: Markdown link [text](url)
     // Group 6: Bare URL (any https://...)
     // Group 7: Bold **text**
-    const combinedRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)|(https:\/\/replicate\.delivery\/[^\s)]+|https?:\/\/[^\s)]+\.(?:webp|png|jpg|jpeg|gif))|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)]+)|\*\*([^*]+)\*\*/g;
+    const combinedRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)|(https:\/\/replicate\.delivery\/[^\s)]+|https:\/\/media\.getlate\.dev\/[^\s)]+|https?:\/\/[^\s)]+\.(?:webp|png|jpg|jpeg|gif))|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)]+)|\*\*([^*]+)\*\*/g;
 
     let lastIndex = 0;
     let match;
@@ -70,7 +70,7 @@ function MessageContent({ content }: { content: string }) {
           </span>
         );
       } else if (match[3]) {
-        // Bare image URL (replicate.delivery or image extension)
+        // Bare image URL (replicate.delivery, media.getlate.dev, or image extension)
         const url = match[3];
         parts.push(
           <span key={`bareimg-${lineIdx}-${match.index}`} className="block my-3">

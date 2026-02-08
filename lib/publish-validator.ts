@@ -48,6 +48,14 @@ export interface ValidationResult {
   corrections?: string[];
 }
 
+// === HELPER: Validar que una URL de media es de origen confiable ===
+function isValidMediaOrigin(url: string): boolean {
+  return (
+    url.startsWith('https://replicate.delivery/') ||
+    url.startsWith('https://media.getlate.dev/')
+  );
+}
+
 // === VALIDACIÓN PREVENTIVA PARA PUBLISH_POST ===
 
 export async function validateAndPreparePublish(
@@ -67,17 +75,15 @@ export async function validateAndPreparePublish(
 
   // --- 0. Validar media_urls vs generate_image tracking ---
   if (input.media_urls?.length && !generateImageWasCalled) {
-    const allFromReplicate = input.media_urls.every(url =>
-      url.startsWith('https://replicate.delivery/')
-    );
-    if (!allFromReplicate) {
+    const allFromValidOrigin = input.media_urls.every(url => isValidMediaOrigin(url));
+    if (!allFromValidOrigin) {
       return {
         success: false,
-        error: 'ERROR: Se incluyeron media_urls con URLs no válidas. Las URLs de imágenes deben ser de replicate.delivery (obtenidas via generate_image). Llama la tool generate_image PRIMERO para obtener una URL real.',
-        corrections: ['media_urls rechazadas: URLs no son de replicate.delivery y generate_image no fue llamada en esta sesión'],
+        error: 'ERROR: Se incluyeron media_urls con URLs no válidas. Las URLs de imágenes deben ser de replicate.delivery o media.getlate.dev (obtenidas via generate_image). Llama la tool generate_image PRIMERO para obtener una URL real.',
+        corrections: ['media_urls rechazadas: URLs no son de replicate.delivery ni media.getlate.dev y generate_image no fue llamada en esta sesión'],
       };
     }
-    corrections.push('media_urls de replicate.delivery aceptadas de request anterior (generate_image no fue llamada en este request)');
+    corrections.push('media_urls de origen válido aceptadas de request anterior (generate_image no fue llamada en este request)');
   }
 
   // --- 1. Limpiar markdown del contenido ---

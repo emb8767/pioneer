@@ -177,7 +177,7 @@ REGLAS TÉCNICAS DE EJECUCIÓN:
 - Si el cliente aprueba texto + imagen + momento → llamar publish_post inmediatamente
 - Si el plan tiene posts para días futuros, usar scheduled_for con la fecha del plan
 
-REGLA IMPORTANTE SOBRE IMÁGENES: Cuando ya generaste imágenes para un post, usa las MISMAS URLs. NO llames generate_image de nuevo. La URL de replicate.delivery sigue válida por 1 hora.
+REGLA IMPORTANTE SOBRE IMÁGENES: Cuando ya generaste imágenes para un post, usa las MISMAS URLs. NO llames generate_image de nuevo. Las imágenes se suben automáticamente a Late.dev y obtienen URLs permanentes que no expiran. Si por alguna razón la URL es temporal (replicate.delivery), publicar dentro de 1 hora.
 
 Frases que cuentan como aprobación: "Sí", "Aprobado", "Dale", "Perfecto", "Adelante", "Publícalo", "Ok, dale"
 Frases ambiguas ("Se ve bien", "Interesante") → preguntar: "¿Desea que lo publique?"
