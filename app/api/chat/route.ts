@@ -126,6 +126,10 @@ Horarios óptimos PR (America/Puerto_Rico, UTC-4):
 - Lun-Vie: 12:00 PM o 7:00 PM
 - Sáb-Dom: 10:00 AM o 1:00 PM
 
+Límites de plataformas:
+- Facebook: máximo 25 posts/día, mínimo 20 minutos entre posts. Si un plan tiene múltiples posts para el mismo día, programarlos con al menos 1 hora de separación.
+- Si publish_post falla con "posting too fast", el sistema auto-reprograma para +30 minutos. Informa al cliente que el post fue reprogramado automáticamente.
+
 === REGLA CRÍTICA DE PUBLICACIÓN ===
 
 ⚠️ PROHIBICIÓN ABSOLUTA: NUNCA digas "publicado exitosamente" o confirmes una publicación sin haber llamado la tool publish_post.
@@ -158,6 +162,8 @@ Pioneer DECIDE como experto: tipo de post, estilo de imagen, aspect ratio, canti
 La aprobación del plan = autorización para ejecutar el primer post completo.
 NO preguntes "¿quiere imagen?" — inclúyela por defecto (es lo profesional).
 NO muestres el texto y esperes aprobación — genera, publica, y muestra el resultado.
+
+REGLA DE CONTENIDO: Cuando llames publish_post, usa el texto EXACTO que devolvió generate_content. NO lo edites, NO le añadas comillas decorativas, NO le pongas formato propio. El texto ya sale listo para publicar.
 
 EXCEPCIONES — solo pausar si el cliente lo pide explícitamente:
 - "Quiero ver el texto antes de publicar" → generar texto, mostrar, esperar OK
@@ -560,8 +566,9 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-// === LIMPIAR MARKDOWN PARA REDES SOCIALES ===
+// === LIMPIAR MARKDOWN Y FORMATO PARA REDES SOCIALES ===
 // Facebook, Instagram, etc. no renderizan markdown — los ** se muestran como asteriscos
+// También limpia comillas decorativas que Claude añade alrededor de "testimonios"
 function stripMarkdown(text: string): string {
   return text
     .replace(/\*\*\*(.*?)\*\*\*/g, '$1')   // ***bold italic*** → text
@@ -570,7 +577,11 @@ function stripMarkdown(text: string): string {
     .replace(/~~(.*?)~~/g, '$1')            // ~~strikethrough~~ → text
     .replace(/`(.*?)`/g, '$1')              // `code` → text
     .replace(/^#{1,6}\s+/gm, '')            // ### headers → text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // [link](url) → link text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [link](url) → link text
+    .replace(/^"|"$/gm, '')                 // Comillas decorativas al inicio/fin de línea
+    .replace(/[""]/g, '"')                  // Comillas tipográficas → rectas
+    .replace(/['']/g, "'")                  // Apóstrofes tipográficos → rectos
+    .replace(/\\"/g, '"');                  // Comillas escapadas \"...\" → "..."
 }
 
 // === VALIDACIÓN PREVENTIVA PARA PUBLISH_POST ===
@@ -751,6 +762,15 @@ async function validateAndPreparePublish(
 
 // === RETRY INTELIGENTE ===
 
+// Detectar si el error es "posting too fast" de Facebook/plataforma
+function isPostingTooFast(error: unknown): boolean {
+  if (error instanceof LateApiError) {
+    const bodyLower = error.body.toLowerCase();
+    return bodyLower.includes('posting too fast') || bodyLower.includes('rate limit');
+  }
+  return false;
+}
+
 function isTransientError(error: unknown): boolean {
   if (error instanceof LateApiError) {
     if (error.status >= 500) {
@@ -765,13 +785,44 @@ function isTransientError(error: unknown): boolean {
   return false;
 }
 
+// Calcula una fecha +30 minutos desde ahora en PR timezone
+function getScheduleIn30Min(): string {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() + 30);
+  return now.toISOString().replace(/\.\d{3}Z$/, '');
+}
+
 async function publishWithRetry(
   data: ValidatedPublishData
-): Promise<{ message: string; post: unknown }> {
+): Promise<{ message: string; post: unknown; autoRescheduled?: boolean; rescheduledFor?: string }> {
   try {
-    return await createPost(data);
+    const result = await createPost(data);
+    return result;
   } catch (firstError) {
     console.error('[Pioneer] Primer intento de publicación falló:', firstError);
+
+    // === AUTO-REPROGRAMAR si "posting too fast" ===
+    if (isPostingTooFast(firstError)) {
+      console.log('[Pioneer] "Posting too fast" detectado. Auto-reprogramando para +30 minutos...');
+      const rescheduleTime = getScheduleIn30Min();
+      const rescheduledData: ValidatedPublishData = {
+        ...data,
+        publishNow: false,
+        scheduledFor: rescheduleTime,
+        timezone: PR_TIMEZONE,
+      };
+      try {
+        const result = await createPost(rescheduledData);
+        return {
+          ...result,
+          autoRescheduled: true,
+          rescheduledFor: rescheduleTime,
+        };
+      } catch (rescheduleError) {
+        console.error('[Pioneer] Auto-reprogramación también falló:', rescheduleError);
+        throw rescheduleError;
+      }
+    }
 
     if (!isTransientError(firstError)) {
       throw firstError;
@@ -1067,15 +1118,30 @@ async function executeTool(
 
           const imageIncluded = !!(validation.data.mediaItems && validation.data.mediaItems.length > 0);
 
+          // Detectar si fue auto-reprogramado por "posting too fast"
+          const wasAutoRescheduled = 'autoRescheduled' in result && result.autoRescheduled;
+          const rescheduledFor = 'rescheduledFor' in result ? result.rescheduledFor : undefined;
+
+          let successMessage: string;
+          if (wasAutoRescheduled && rescheduledFor) {
+            successMessage = `La plataforma indicó "posting too fast". El post fue auto-reprogramado para ${rescheduledFor} (en ~30 minutos). No se requiere acción del cliente.`;
+          } else if (validation.data.publishNow) {
+            successMessage = 'Post publicado exitosamente';
+          } else {
+            successMessage = `Post programado para ${validation.data.scheduledFor}`;
+          }
+
           return {
             result: JSON.stringify({
               success: true,
-              message: validation.data.publishNow
-                ? 'Post publicado exitosamente'
-                : `Post programado para ${validation.data.scheduledFor}`,
+              message: successMessage,
               post: result.post,
               image_included: imageIncluded,
-              ...(validation.data.scheduledFor && {
+              ...(wasAutoRescheduled && {
+                auto_rescheduled: true,
+                rescheduled_for: rescheduledFor,
+              }),
+              ...(validation.data.scheduledFor && !wasAutoRescheduled && {
                 scheduledFor: validation.data.scheduledFor,
                 timezone: validation.data.timezone,
               }),
