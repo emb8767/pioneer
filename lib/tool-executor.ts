@@ -182,8 +182,8 @@ export async function executeTool(
                 num_outputs: 1,
               });
 
-              if (imgResult.success && imgResult.image_url) {
-                allImages.push(imgResult.image_url);
+              if (imgResult.success && imgResult.images && imgResult.images.length > 0) {
+                allImages.push(...imgResult.images);
                 totalCostReal += imgResult.cost_real || 0;
                 totalCostClient += imgResult.cost_client || 0;
                 if (imgResult.regenerated) anyRegenerated = true;
