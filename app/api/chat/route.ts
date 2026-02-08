@@ -134,6 +134,8 @@ PASO 5: Pedir aprobación explícita del post completo (texto + imagen si la hay
 PASO 6: Solo con aprobación explícita → LLAMAR publish_post (NO generar confirmación sin llamar la tool)
 PASO 7: Confirmar publicación basándote en el resultado REAL de publish_post → preguntar: "¿Continuamos con el siguiente post del plan?"
 
+REGLA IMPORTANTE SOBRE IMÁGENES: Cuando el cliente aprueba un post con imagen y dice "publícalo", usa la MISMA URL de imagen que ya generaste y mostraste. NO llames generate_image de nuevo. La URL de replicate.delivery que ya obtuviste sigue siendo válida por 1 hora.
+
 Cada post requiere su propia aprobación. El cliente responde entre cada post.
 Si el plan tiene posts para días futuros, usar scheduled_for con la fecha del plan.
 Solo puedes publicar 1 post por mensaje. Para el siguiente post, espera un nuevo mensaje del cliente.
@@ -161,6 +163,7 @@ Sobre imágenes:
 - Las URLs expiran en 1 hora — publicar pronto después de generar
 - Si el cliente quiere su propia foto: "La función de subir fotos estará disponible próximamente. Puedo generar una imagen AI o publicar solo con texto."
 - Si el resultado de generate_image incluye _note_for_pioneer con "regenerated", informa al cliente que la primera imagen no fue accesible y se regeneró, con el costo total actualizado. Ejemplo: "La primera imagen generada no fue accesible, así que generé una nueva. El costo total de imagen fue de $0.030 en vez de $0.015."
+- NUNCA llames generate_image dos veces para el mismo post. Si ya generaste una imagen y el cliente la aprobó, usa esa misma URL en publish_post.
 
 === TIPOS DE CONTENIDO ===
 
@@ -316,7 +319,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_image',
     description:
-      'Genera una imagen con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Úsala cuando el cliente acepta tener una imagen AI, o cuando pide una imagen directamente. El prompt DEBE ser en inglés. Devuelve una URL real (https://replicate.delivery/...) que se puede usar en media_urls de publish_post. Las URLs expiran en 1 hora — publicar pronto después de generar.',
+      'Genera una imagen con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Úsala cuando el cliente acepta tener una imagen AI, o cuando pide una imagen directamente. El prompt DEBE ser en inglés. Devuelve una URL real (https://replicate.delivery/...) que se puede usar en media_urls de publish_post. Las URLs expiran en 1 hora — publicar pronto después de generar. NO llames esta tool si ya generaste una imagen para este post — reutiliza la URL existente.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -348,7 +351,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'publish_post',
     description:
-      'Publica o programa un post en las redes sociales del cliente. OBLIGATORIO llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Puede publicar inmediatamente o programar para una fecha futura. Si incluyes media_urls, SOLO usa URLs reales obtenidas de generate_image.',
+      'Publica o programa un post en las redes sociales del cliente. OBLIGATORIO llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Puede publicar inmediatamente o programar para una fecha futura. Si incluyes media_urls, usa URLs reales de replicate.delivery obtenidas de generate_image (pueden ser del mensaje actual o de un mensaje anterior en la conversación).',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -407,7 +410,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'URLs de imágenes o videos a incluir en el post. SOLO usar URLs reales obtenidas de generate_image (https://replicate.delivery/...).',
+            'URLs de imágenes o videos a incluir en el post. Usar URLs reales de replicate.delivery obtenidas de generate_image.',
         },
       },
       required: ['content', 'platforms'],
@@ -461,12 +464,22 @@ async function validateAndPreparePublish(
   const corrections: string[] = [];
 
   // --- 0. Validar media_urls vs generate_image tracking ---
+  // FIX: Permitir URLs legítimas de replicate.delivery aunque generate_image
+  // no se haya llamado en ESTE request (pudo haberse llamado en un request anterior).
+  // Solo rechazar URLs que NO sean de replicate.delivery cuando generate_image no fue llamada.
   if (input.media_urls?.length && !generateImageWasCalled) {
-    return {
-      success: false,
-      error: 'ERROR: Se incluyeron media_urls pero no se llamó generate_image en esta conversación. Debes llamar la tool generate_image PRIMERO para obtener una URL real, y luego usar esa URL en publish_post.',
-      corrections: ['media_urls rechazadas: generate_image no fue llamada en esta sesión'],
-    };
+    const allFromReplicate = input.media_urls.every(url =>
+      url.startsWith('https://replicate.delivery/')
+    );
+    if (!allFromReplicate) {
+      return {
+        success: false,
+        error: 'ERROR: Se incluyeron media_urls con URLs no válidas. Las URLs de imágenes deben ser de replicate.delivery (obtenidas via generate_image). Llama la tool generate_image PRIMERO para obtener una URL real.',
+        corrections: ['media_urls rechazadas: URLs no son de replicate.delivery y generate_image no fue llamada en esta sesión'],
+      };
+    }
+    // URLs de replicate.delivery son legítimas de un request anterior — permitir
+    corrections.push('media_urls de replicate.delivery aceptadas de request anterior (generate_image no fue llamada en este request)');
   }
 
   // --- 1. Limpiar markdown del contenido ---
@@ -776,6 +789,14 @@ async function executeTool(
           timezone?: string;
           media_urls?: string[];
         };
+
+        // === FIX BUG 8.1b: Inyectar imagen automáticamente en retry de alucinación ===
+        // Si estamos en retry de alucinación y hay una imagen guardada pero Claude
+        // no incluyó media_urls, agregar la imagen automáticamente.
+        if (hallucinationRetryUsed && lastGeneratedImageUrl && (!input.media_urls || input.media_urls.length === 0)) {
+          console.log(`[Pioneer] Inyectando imagen guardada en publish_post durante retry: ${lastGeneratedImageUrl.substring(0, 80)}...`);
+          input.media_urls = [lastGeneratedImageUrl];
+        }
 
         // === NIVEL 1: VALIDACIÓN PREVENTIVA ===
         const validation = await validateAndPreparePublish(input, generateImageWasCalled);
