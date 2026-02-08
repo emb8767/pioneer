@@ -7,8 +7,9 @@
 // que causaban el bug de NoSuchKey y URLs rotas. Con useFileOutput: false,
 // replicate.run() devuelve strings directas (URLs HTTP normales).
 //
-// VALIDACIÓN: Después de generar, hacemos HEAD request a la URL para verificar
-// que es accesible. Si falla, regeneramos automáticamente (max 1 retry).
+// VALIDACIÓN: Después de generar, hacemos GET parcial (Range: bytes=0-0) a la URL
+// para verificar que es accesible. HEAD puede dar falsos positivos en Cloudflare CDN.
+// Si falla, regeneramos automáticamente (max 1 retry).
 
 import Replicate from 'replicate';
 import type { Platform } from './types';
@@ -60,8 +61,12 @@ const MARKUP = 5;
 // Máximo de intentos de generación (1 original + 1 retry)
 const MAX_GENERATION_ATTEMPTS = 2;
 
-// Timeout para HEAD validation (ms)
-const HEAD_VALIDATION_TIMEOUT_MS = 5000;
+// Timeout para validación de URL (ms)
+const URL_VALIDATION_TIMEOUT_MS = 8000;
+
+// Delay después de generación antes de validar (ms)
+// Permite que Cloudflare CDN propague el archivo al edge node
+const CDN_PROPAGATION_DELAY_MS = 2000;
 
 // === ASPECT RATIOS RECOMENDADOS POR PLATAFORMA ===
 
@@ -94,22 +99,37 @@ function getReplicateClient(): Replicate {
 }
 
 // === VALIDACIÓN DE URL ===
-// HEAD request para verificar que la URL de Replicate es accesible
-// antes de pasarla a Late.dev para publicar
+// GET parcial (Range: bytes=0-0) para verificar que la URL de Replicate es accesible.
+// Usamos GET con Range en vez de HEAD porque Cloudflare CDN puede responder 200 a HEAD
+// incluso cuando el archivo no se ha propagado al edge node del usuario.
+// Un GET parcial fuerza al CDN a intentar servir bytes reales del archivo.
 
 async function validateImageUrl(url: string): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), HEAD_VALIDATION_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), URL_VALIDATION_TIMEOUT_MS);
 
     const response = await fetch(url, {
-      method: 'HEAD',
+      method: 'GET',
+      headers: { 'Range': 'bytes=0-0' },
       signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
 
-    if (response.ok) {
+    // 200 = archivo completo servido (CDN no soportó Range)
+    // 206 = Partial Content (Range soportado, archivo existe)
+    if (response.ok || response.status === 206) {
+      const contentType = response.headers.get('content-type') || 'unknown';
+      const contentLength = response.headers.get('content-length') || 'unknown';
+      console.log(`[Pioneer] URL validation OK: ${response.status}, type=${contentType}, length=${contentLength}, url=${url.substring(0, 80)}...`);
+
+      // Verificar que el content-type sea imagen (no HTML de error)
+      if (contentType.includes('text/html') || contentType.includes('application/json')) {
+        console.warn(`[Pioneer] URL devolvió ${contentType} en vez de imagen — probablemente es una página de error`);
+        return false;
+      }
+
       return true;
     }
 
@@ -177,9 +197,11 @@ async function generateOnce(
  *
  * Flujo:
  * 1. Genera imagen con replicate.run() (useFileOutput: false → URLs string)
- * 2. Hace HEAD request para validar que la URL es accesible
- * 3. Si la URL falla validación, regenera automáticamente (max 1 retry)
- * 4. Devuelve resultado con campos regenerated/attempts/cost_client acumulados
+ * 2. Espera 2s para propagación CDN
+ * 3. Hace GET parcial (Range: bytes=0-0) para validar que la URL es accesible
+ * 4. Verifica content-type (descarta respuestas HTML/JSON de error)
+ * 5. Si la URL falla validación, regenera automáticamente (max 1 retry)
+ * 6. Devuelve resultado con campos regenerated/attempts/cost_client acumulados
  *
  * Las URLs de output expiran en ~1 hora.
  */
@@ -226,7 +248,11 @@ export async function generateImage(
         };
       }
 
-      // === VALIDAR URLs con HEAD request ===
+      // === DELAY: Esperar propagación CDN antes de validar ===
+      console.log(`[Pioneer] Esperando ${CDN_PROPAGATION_DELAY_MS}ms para propagación CDN...`);
+      await new Promise((resolve) => setTimeout(resolve, CDN_PROPAGATION_DELAY_MS));
+
+      // === VALIDAR URLs con GET parcial ===
       const validImages: string[] = [];
       let hasInvalidUrl = false;
 
@@ -259,12 +285,12 @@ export async function generateImage(
       }
 
       // Todas las URLs son inválidas
-      console.warn(`[Pioneer] Intento ${attempt}: Todas las URLs fallaron validación HEAD`);
+      console.warn(`[Pioneer] Intento ${attempt}: Todas las URLs fallaron validación GET parcial`);
 
       if (attempt < MAX_GENERATION_ATTEMPTS) {
         console.log('[Pioneer] Regenerando imagen...');
         regenerated = true;
-        // Pequeña pausa antes de reintentar
+        // Pausa antes de reintentar
         await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
@@ -279,7 +305,7 @@ export async function generateImage(
         expires_in: '',
         regenerated: true,
         attempts,
-        error: 'Las imágenes generadas no fueron accesibles (URLs inválidas). Intente de nuevo.',
+        error: 'Las imágenes generadas no fueron accesibles (URLs inválidas después de verificación). Intente de nuevo.',
       };
     }
 
