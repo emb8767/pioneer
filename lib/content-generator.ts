@@ -1,5 +1,6 @@
 // Generador de contenido para Pioneer Agent
 // Extraído de app/api/content/route.ts para uso directo (sin fetch HTTP)
+// v7: Reglas de brevedad añadidas a prompts y system prompt
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentRequest, Platform } from './types';
@@ -33,53 +34,63 @@ const PLATFORM_HASHTAG_COUNT: Partial<Record<Platform, number>> = {
   bluesky: 3,
 };
 
+// === REGLAS DE BREVEDAD (inyectadas en cada prompt de generación) ===
+const BREVITY_RULES = `
+REGLAS DE BREVEDAD — OBLIGATORIO:
+- Máximo 3-5 líneas de texto real + CTA + hashtags.
+- NUNCA listes más de 2-3 items. Si hay más, destaca 1-2 y di "y más".
+- Fórmula: Hook (1 línea) + Beneficio (1-2 líneas) + CTA (1 línea) + hashtags.
+- Un buen post se lee en 3 SEGUNDOS.
+- NO escribas párrafos largos. NO listes menús completos ni catálogos.`;
+
 // Prompt base según tipo de post
 function getPromptForType(req: ContentRequest, platform: Platform): string {
   const charLimit = PLATFORM_CHAR_LIMITS[platform];
   const base = `Negocio: ${req.business_name} (${req.business_type})
 Plataforma: ${platform}
-Máximo ${charLimit} caracteres.`;
+Máximo ${charLimit} caracteres.
+${BREVITY_RULES}`;
 
   const prompts: Record<string, string> = {
-    oferta: `Genera un post de redes sociales para promocionar una oferta.
+    oferta: `Genera un post BREVE de redes sociales para promocionar una oferta.
 ${base}
 Detalles de la oferta: ${req.details}
-El post debe capturar atención, mencionar el beneficio claramente, y terminar con un llamado a acción.`,
+Hook llamativo + beneficio claro + CTA directo. Máximo 5 líneas de texto real.`,
 
-    educativo: `Genera un post educativo que posicione al negocio como experto.
+    educativo: `Genera un post BREVE educativo que posicione al negocio como experto.
 ${base}
 Tema: ${req.details}
-El post debe compartir un tip útil, relacionarlo con el negocio, y ser fácil de entender.`,
+Un solo tip útil + relación con el negocio + CTA. Máximo 5 líneas.`,
 
-    testimonio: `Genera un post basado en un testimonio de cliente.
+    testimonio: `Genera un post BREVE basado en un testimonio de cliente.
 ${base}
 Contexto: ${req.details}
-El post debe contar una mini-historia, incluir un resultado concreto, y sentirse auténtico.`,
+Mini-historia en 2-3 líneas + resultado concreto + CTA.`,
 
-    detras_de_escenas: `Genera un post que muestre el lado humano del negocio.
+    detras_de_escenas: `Genera un post BREVE que muestre el lado humano del negocio.
 ${base}
 Contexto: ${req.details}
-El post debe ser casual, personal, y generar conexión emocional.`,
+Frase personal + detalle auténtico + invitación. Máximo 4 líneas.`,
 
-    urgencia: `Genera un post que impulse acción inmediata.
+    urgencia: `Genera un post BREVE que impulse acción inmediata.
 ${base}
 Situación: ${req.details}
-El post debe crear urgencia, ser directo y corto, con CTA muy claro.`,
+Urgencia directa + CTA inmediato. Máximo 3-4 líneas.`,
 
-    cta: `Genera un post con un llamado a acción directo.
+    cta: `Genera un post BREVE con un llamado a acción directo.
 ${base}
 Acción deseada: ${req.details}
-El post debe enfocarse en UN solo beneficio y dar instrucciones claras.`,
+UN solo beneficio + instrucción clara. Máximo 3-4 líneas.`,
 
-    branding: `Genera un post que presente o refuerce la marca del negocio.
+    branding: `Genera un post BREVE que presente o refuerce la marca del negocio.
 ${base}
 Mensaje clave: ${req.details}
-El post debe comunicar valores, diferenciarse, y ser inspirador.`,
+Frase inspiradora + diferenciador + CTA. Máximo 5 líneas.`,
 
-    interactivo: `Genera un post interactivo que genere engagement.
+    interactivo: `Genera un post BREVE interactivo que genere engagement.
 ${base}
 Tema: ${req.details}
-El post debe hacer una pregunta directa, ser fácil de responder, y ser conversacional.`,
+Pregunta directa + opciones simples. Máximo 3-4 líneas.`,
   };
 
   return prompts[req.post_type] || prompts.oferta;
@@ -158,12 +169,13 @@ export async function generateContent(
 Genera contenido en español. No uses modismos de otros países latinoamericanos.
 El contenido debe ser claro, directo y persuasivo.
 Usa emojis con moderación (1-3 máximo).
+IMPORTANTE: Los posts deben ser CORTOS y PUNCHY — máximo 3-5 líneas de texto real antes de hashtags. NUNCA escribas párrafos largos ni listes más de 2-3 items. Las imágenes cuentan la historia visual, el texto solo complementa.
 ${includeHashtags && hashtagCount > 0 ? `Incluye ${hashtagCount} hashtags relevantes al final del texto. Incluye al menos 1 hashtag local (#PR, #PuertoRico, o del municipio) y 1 de la industria.` : 'NO incluyas hashtags.'}
-Responde SOLO con el texto del post, nada más. Sin comillas, sin explicaciones.`;
+Responde SOLO con el texto del post, nada más. Sin explicaciones, sin comillas, sin prefijos.`;
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 1024,
+      max_tokens: 500,
       system: systemPrompt,
       messages: [{ role: 'user', content: prompt }],
     });

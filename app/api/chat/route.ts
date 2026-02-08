@@ -67,7 +67,7 @@ function detectPublishHallucination(text: string, publishPostCount: number): boo
   return PUBLISH_HALLUCINATION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-// === SYSTEM PROMPT v5 — CON OAUTH HEADLESS ===
+// === SYSTEM PROMPT v7 — INVISIBLE MARKETING + BREVEDAD ===
 function buildSystemPrompt(): string {
   const fechaActual = getCurrentDateForPrompt();
 
@@ -84,10 +84,14 @@ Fecha y hora actual: ${fechaActual}
 - No dar consejos legales, médicos o financieros
 - No prometer resultados específicos
 
-=== REGLA DE ACCIÓN ===
-Si el cliente da suficiente información para actuar (qué negocio tiene + qué quiere + para qué plataforma), PROCEDE a crear el plan o ejecutar. No hagas preguntas innecesarias.
+=== REGLA DE ACCIÓN — INVISIBLE MARKETING ===
+Pioneer actúa como un especialista humano: el cliente dice qué quiere, Pioneer EJECUTA.
+No hagas preguntas innecesarias. Si tienes suficiente información para actuar, ACTÚA.
 
-Solo pregunta cuando FALTA información esencial que no puedes asumir razonablemente. Máximo 2-3 preguntas, nunca 6.
+Solo pregunta cuando FALTA información esencial que no puedes asumir razonablemente:
+- ¿Qué tipo de negocio? (si no lo ha dicho)
+- ¿Qué quiere lograr? (si es ambiguo)
+Máximo 1-2 preguntas, nunca más.
 
 === CONTENIDO PROHIBIDO ===
 Rechazar solicitudes de: pornografía, drogas, armas, apuestas, alcohol (como producto), tabaco/vape, criptomonedas/trading, campañas políticas, actividades ilegales.
@@ -98,9 +102,9 @@ Respuesta: "Lo siento, no puedo ayudarle con ese tipo de contenido ya que está 
 
 Cuando el cliente exprese un objetivo:
 1. Clasificar: ventas, clientes nuevos, crecimiento redes, promoción específica, visitas al local, branding
-2. Si falta info esencial, preguntar (máximo 2-3 preguntas)
+2. Si falta info esencial, preguntar (máximo 1-2 preguntas)
 3. Generar plan con: nombre, duración, canales, acciones numeradas, costo desglosado (orgánico y con ads)
-4. Pedir aprobación
+4. Pedir aprobación del plan
 
 Formato de plan:
 📋 **Plan: [Nombre]**
@@ -135,28 +139,42 @@ Si el cliente dice "sí" o "publícalo", tu ÚNICA respuesta válida es LLAMAR l
 
 Esto aplica igual para "programado". No confirmes programación sin llamar publish_post.
 
-=== EJECUCIÓN — UN POST A LA VEZ ===
+=== EJECUCIÓN — FLUJO RÁPIDO (INVISIBLE MARKETING) ===
 
-Cuando un plan es aprobado, ejecuta UN POST a la vez siguiendo este flujo exacto:
+Cuando el cliente aprueba un plan o dice "publícalo/aprobado/dale", EJECUTA TODO EN CADENA sin parar a preguntar:
 
-PASO 1: Verificar cuentas conectadas (list_connected_accounts)
-PASO 2: Generar texto del post (generate_content)
-PASO 3: Mostrar texto al cliente y preguntar: "¿Desea acompañar este post con una imagen AI ($0.015) o publicar solo con texto?"
-PASO 4: Si quiere imagen → llamar generate_image → mostrar URL de la imagen al cliente
-PASO 5: Pedir aprobación explícita del post completo (texto + imagen si la hay)
-PASO 6: Solo con aprobación explícita → LLAMAR publish_post (NO generar confirmación sin llamar la tool)
-PASO 7: Confirmar publicación basándote en el resultado REAL de publish_post → preguntar: "¿Continuamos con el siguiente post del plan?"
+1. list_connected_accounts (verificar cuentas)
+2. generate_content (crear texto — BREVE, ver reglas abajo)
+3. generate_image (crear imagen por defecto — schnell $0.015, o carrusel si el contenido lo amerita)
+4. publish_post (publicar inmediatamente o programar según el plan)
+5. Mostrar SOLO el resultado final al cliente:
+   - ✅ Texto usado (resumido)
+   - 🖼️ Imagen(es) generada(s)
+   - 📱 Plataforma y estado (publicado/programado)
+   - 💰 Costo total
+   - "¿Continuamos con el siguiente post del plan?"
 
-REGLA IMPORTANTE SOBRE IMÁGENES: Cuando el cliente aprueba un post con imagen y dice "publícalo", usa la MISMA URL de imagen que ya generaste y mostraste. NO llames generate_image de nuevo. La URL de replicate.delivery que ya obtuviste sigue siendo válida por 1 hora.
+Pioneer DECIDE como experto: tipo de post, estilo de imagen, aspect ratio, cantidad de imágenes, horario óptimo.
+La aprobación del plan = autorización para ejecutar el primer post completo.
+NO preguntes "¿quiere imagen?" — inclúyela por defecto (es lo profesional).
+NO muestres el texto y esperes aprobación — genera, publica, y muestra el resultado.
 
-Cada post requiere su propia aprobación. El cliente responde entre cada post.
+EXCEPCIONES — solo pausar si el cliente lo pide explícitamente:
+- "Quiero ver el texto antes de publicar" → generar texto, mostrar, esperar OK
+- "Sin imagen" o "solo texto" → omitir generate_image
+- "Quiero elegir las imágenes" → generar, mostrar, esperar selección
+- "Quiero un carrusel de 5 fotos" → ajustar count según su pedido
+
+Cada post requiere su propio turno. Solo puedes publicar 1 post por mensaje.
 Si el plan tiene posts para días futuros, usar scheduled_for con la fecha del plan.
-Solo puedes publicar 1 post por mensaje. Para el siguiente post, espera un nuevo mensaje del cliente.
+Para el siguiente post, espera un nuevo mensaje del cliente.
 
-Frases que cuentan como aprobación: "Sí, publícalo", "Aprobado", "Dale, publica", "Perfecto, adelante", "si"
-Frases ambiguas ("Se ve bien", "Ok", "Interesante") → preguntar: "¿Desea que publique este contenido?"
+Frases que cuentan como aprobación: "Sí", "Aprobado", "Dale", "Perfecto", "Adelante", "Publícalo", "Ok, dale"
+Frases ambiguas ("Se ve bien", "Interesante") → preguntar: "¿Desea que ejecute el plan?"
 
-Cuando el cliente aprueba, tu respuesta DEBE incluir un tool_use block para publish_post. NO respondas solo con texto.
+REGLA IMPORTANTE SOBRE IMÁGENES: Cuando ya generaste imágenes para un post, usa las MISMAS URLs. NO llames generate_image de nuevo. La URL de replicate.delivery sigue válida por 1 hora.
+
+Cuando el cliente aprueba, tu respuesta DEBE incluir tool_use blocks para ejecutar. NO respondas solo con texto.
 
 === CONEXIÓN DE REDES SOCIALES (OAuth) ===
 
@@ -241,55 +259,44 @@ Reglas de carrusel:
 - NO mezclar imágenes y video en el mismo post
 - Usar el parámetro count en generate_image (no llamar múltiples veces)
 - Informar al cliente el costo total: $0.015 × cantidad de imágenes
-- Presentar el plan con el número de imágenes y su justificación estratégica
-- Ejemplo: "Para mostrar su menú, recomiendo un carrusel de 4 imágenes: plato estrella, postres, bebidas y ambiente. Costo de imágenes: $0.06"
+- Ejemplo: "Carrusel de 4 imágenes para mostrar su menú. Costo: $0.06"
 
-=== TIPOS DE CONTENIDO ===
+=== TIPOS DE CONTENIDO Y REGLAS DE BREVEDAD ===
 
 8 tipos: oferta, educativo, testimonio, detrás de escenas, urgencia, CTA, branding, interactivo.
 
-Reglas: español estilo PR, emojis moderados (1-3), adaptar al límite de cada plataforma, hashtags locales + industria, CTA claro en cada post.
+⚠️ REGLAS DE BREVEDAD — CRÍTICO:
+- Posts de Facebook/Instagram: máximo 3-5 líneas de texto + CTA + hashtags
+- NUNCA listar menús completos, catálogos de productos, o más de 2-3 items
+- Las imágenes del carrusel cuentan la historia visual — el texto SOLO complementa
+- Fórmula ganadora: Hook (1 línea) + Beneficio (1-2 líneas) + CTA (1 línea) + hashtags
+- Si hay muchos productos, DESTACAR 1-2 y decir "y más" — NO listar todos
+- Máximo 280 caracteres de texto real (sin contar hashtags) para Facebook e Instagram
+- Un buen post se lee en 3 segundos — si es más largo, está mal
 
-=== CONFIRMACIÓN DE PUBLICACIÓN ===
+Ejemplo MALO: "🍕 Tenemos: pizza pepperoni, pizza hawaiana, pizza margarita, pizza BBQ, lasagna, ravioli, spaghetti, ensalada César, pan de ajo, tiramisú..."
+Ejemplo BUENO: "🍕 ¿Se te antoja? Nuestra pizza artesanal recién salida del horno te espera.\\n\\n📍 Visítanos en [dirección]\\n📱 Ordena al [teléfono]\\n\\n#PizzaPR #ComidaBoricua"
 
-SOLO después de recibir resultado exitoso de publish_post, confirmar:
-✅ Publicado exitosamente
-- Plataforma: [nombre]
-- Estado: Publicado / Programado para [fecha]
-- Imagen: Incluida / Sin imagen
-
-=== ONBOARDING ===
-
-Si es cliente nuevo, recoger en conversación: nombre del negocio, tipo, redes sociales actuales, objetivo principal. No hacer formularios largos — recoger naturalmente.
-
-=== ESCALAMIENTO ===
-
-Si no puedes hacer algo, dirigir a info@pioneeragt.com.`;
+Reglas generales: español estilo PR, emojis moderados (1-3), hashtags locales (#PR #PuertoRico) + industria, CTA claro en cada post.
+`;
 }
 
-// === DEFINICIÓN DE TOOLS PARA CLAUDE API ===
-
+// === TOOLS DISPONIBLES PARA CLAUDE ===
 const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'list_connected_accounts',
     description:
-      'Lista las cuentas de redes sociales conectadas del cliente. Úsala para verificar qué plataformas tiene disponibles antes de proponer un plan o publicar contenido.',
+      'Lista las cuentas de redes sociales conectadas del cliente. Úsala ANTES de proponer un plan o publicar, para saber en qué plataformas puede publicar.',
     input_schema: {
       type: 'object' as const,
-      properties: {
-        profile_id: {
-          type: 'string',
-          description:
-            'ID del perfil del cliente en Late.dev. Si no se proporciona, usa el perfil por defecto.',
-        },
-      },
+      properties: {},
       required: [],
     },
   },
   {
     name: 'generate_connect_url',
     description:
-      'Genera un enlace OAuth para conectar una red social del cliente. El cliente debe abrir este enlace en su navegador para autorizar la conexión. Para plataformas headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat), el modo headless se activa automáticamente y el cliente será redirigido al chat para completar la selección.',
+      'Genera un enlace de autorización OAuth para conectar una red social. El cliente debe abrir este enlace en su navegador para autorizar la conexión. Para plataformas headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat), el modo headless se activa automáticamente.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -298,14 +305,14 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           enum: [
             'facebook',
             'instagram',
-            'linkedin',
             'twitter',
+            'linkedin',
             'tiktok',
             'youtube',
-            'threads',
-            'reddit',
             'pinterest',
+            'reddit',
             'bluesky',
+            'threads',
             'googlebusiness',
             'telegram',
             'snapchat',
@@ -314,7 +321,8 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
         },
         profile_id: {
           type: 'string',
-          description: 'ID del perfil del cliente en Late.dev',
+          description:
+            'El ID del perfil en Late.dev. Usar: 6984c371b984889d86a8b3d6',
         },
       },
       required: ['platform', 'profile_id'],
@@ -323,7 +331,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_content',
     description:
-      'Genera el texto de un post de redes sociales adaptado a las plataformas del cliente. Úsala después de que el cliente aprueba un plan de marketing, para crear el contenido antes de publicar.',
+      'Genera el texto de un post para redes sociales, adaptado a cada plataforma. El texto debe ser BREVE (3-5 líneas + CTA + hashtags). Úsala después de que el cliente aprueba un plan de marketing, para crear el contenido antes de publicar.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -411,18 +419,18 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
           type: 'string',
           enum: ['schnell', 'pro'],
           description:
-            'Modelo a usar. schnell ($0.015/img) = rápido y económico (default). pro ($0.275/img) = mejor calidad.',
+            'Modelo a usar. schnell = rápido y barato ($0.015/img), pro = mejor calidad ($0.275/img). Default: schnell.',
         },
         aspect_ratio: {
           type: 'string',
           enum: ['1:1', '16:9', '21:9', '2:3', '3:2', '4:5', '5:4', '9:16', '9:21'],
           description:
-            'Proporción de la imagen. Usar 4:5 para Instagram, 1:1 para Facebook, 16:9 para Twitter, 9:16 para TikTok. Si es para múltiples plataformas, usar 1:1.',
+            'Aspect ratio. Instagram: 4:5, Facebook: 1:1, Twitter: 16:9, TikTok: 9:16. Multi-plataforma: 1:1.',
         },
         count: {
           type: 'number',
           description:
-            'Cantidad de imágenes a generar (1-10). Default 1. Para carruseles Facebook/Instagram usar 2-10. Costo: $0.015 × count (schnell) o $0.275 × count (pro).',
+            'Cantidad de imágenes a generar (1-10). Usar > 1 para carruseles. Cada imagen cuesta $0.015 (schnell). Default: 1.',
         },
       },
       required: ['prompt'],
@@ -431,7 +439,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'publish_post',
     description:
-      'Publica o programa un post en las redes sociales del cliente. OBLIGATORIO llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Puede publicar inmediatamente o programar para una fecha futura. Si incluyes media_urls, usa URLs reales de replicate.delivery obtenidas de generate_image (pueden ser del mensaje actual o de un mensaje anterior en la conversación).',
+      'Publica o programa un post en las redes sociales del cliente. DEBES llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Puede publicar inmediatamente (publish_now: true) o programar para una fecha futura (scheduled_for). Usar URLs reales de replicate.delivery obtenidas de generate_image.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -480,7 +488,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
         scheduled_for: {
           type: 'string',
           description:
-            'Fecha y hora para programar la publicación en formato ISO 8601 (ej: 2026-02-10T12:00:00)',
+            'Fecha y hora para programar la publicación en formato ISO 8601 (ej: 2026-02-06T12:00:00)',
         },
         timezone: {
           type: 'string',
@@ -906,67 +914,62 @@ async function executeTool(
           count?: number;
         };
 
-        const imageCount = Math.min(Math.max(input.count || 1, 1), 10);
+        const imageCount = input.count && input.count > 1 ? Math.min(input.count, 10) : 0;
 
-        // Para carruseles (count > 1): generar SECUENCIALMENTE para evitar rate limiting de Replicate
-        // Promise.all causa que Replicate rechace llamadas simultáneas con ApiError
+        // === CARRUSEL: Generación secuencial con delay ===
         if (imageCount > 1) {
-          console.log(`[Pioneer] Generando carrusel: ${imageCount} imágenes secuencialmente`);
+          console.log(`[Pioneer] Generando carrusel de ${imageCount} imágenes (secuencial, 10s delay)`);
 
           const allImages: string[] = [];
           let totalCostReal = 0;
           let totalCostClient = 0;
           let anyRegenerated = false;
-          let maxAttempts = 0;
           const errors: string[] = [];
 
           for (let i = 0; i < imageCount; i++) {
-            console.log(`[Pioneer] Generando imagen ${i + 1}/${imageCount}...`);
+            try {
+              // Delay entre imágenes (excepto la primera)
+              if (i > 0) {
+                console.log(`[Pioneer] Esperando 10s antes de imagen ${i + 1}/${imageCount}...`);
+                await new Promise((resolve) => setTimeout(resolve, 10000));
+              }
 
-            const r = await generateImage({
-              prompt: input.prompt,
-              model: (input.model as 'schnell' | 'pro') || 'schnell',
-              aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
-              num_outputs: 1,
-            });
+              console.log(`[Pioneer] Generando imagen ${i + 1}/${imageCount}...`);
+              const result = await generateImage({
+                prompt: input.prompt,
+                model: (input.model as 'schnell' | 'pro') || 'schnell',
+                aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
+                num_outputs: 1,
+              });
 
-            totalCostReal += r.cost_real;
-            totalCostClient += r.cost_client;
-            if (r.regenerated) anyRegenerated = true;
-            if (r.attempts > maxAttempts) maxAttempts = r.attempts;
-
-            if (r.success && r.images.length > 0) {
-              allImages.push(...r.images);
-            } else if (r.error) {
-              errors.push(r.error);
-              console.warn(`[Pioneer] Imagen ${i + 1}/${imageCount} falló: ${r.error}`);
-            }
-
-            // Pausa entre generaciones para respetar rate limit de Replicate
-            // Free plan: burst of 1, rate resets in ~10s cuando tienes <$5 crédito
-            if (i < imageCount - 1) {
-              console.log(`[Pioneer] Esperando 10s antes de generar imagen ${i + 2}/${imageCount} (rate limit Replicate)...`);
-              await new Promise((resolve) => setTimeout(resolve, 10000));
+              if (result.success && result.images && result.images.length > 0) {
+                allImages.push(...result.images);
+                totalCostReal += result.cost_real;
+                totalCostClient += result.cost_client;
+                if (result.regenerated) anyRegenerated = true;
+              } else {
+                errors.push(`Imagen ${i + 1}: ${result.error || 'Error desconocido'}`);
+              }
+            } catch (imgError) {
+              console.error(`[Pioneer] Error en imagen ${i + 1}:`, imgError);
+              errors.push(`Imagen ${i + 1}: ${imgError instanceof Error ? imgError.message : 'Error desconocido'}`);
             }
           }
-
-          console.log(`[Pioneer] Carrusel completado: ${allImages.length}/${imageCount} imágenes generadas. Costo: $${totalCostClient.toFixed(3)}`);
 
           const resultObj: Record<string, unknown> = {
             success: allImages.length > 0,
             images: allImages,
-            model: `flux-schnell (${imageCount} sequential)`,
+            model: input.model || 'schnell',
             cost_real: totalCostReal,
             cost_client: totalCostClient,
-            expires_in: '1 hora (publicar pronto o descargar)',
-            regenerated: anyRegenerated,
-            attempts: maxAttempts,
+            expires_in: '1 hora',
             total_requested: imageCount,
             total_generated: allImages.length,
+            ...(errors.length > 0 && { errors }),
           };
 
-          if (allImages.length < imageCount) {
-            resultObj._note_for_pioneer = `Se solicitaron ${imageCount} imágenes pero solo ${allImages.length} fueron generadas exitosamente. Costo total: $${totalCostClient.toFixed(3)}. Informa al cliente.`;
+          if (allImages.length < imageCount && allImages.length > 0) {
+            resultObj._note_for_pioneer = `Solo se generaron ${allImages.length} de ${imageCount} imágenes solicitadas. Costo total: $${totalCostClient.toFixed(3)}. Informa al cliente.`;
           }
           if (anyRegenerated) {
             resultObj._note_for_pioneer = `Algunas imágenes necesitaron regeneración. Costo total: $${totalCostClient.toFixed(3)} (${imageCount} imágenes). Informa al cliente del costo actualizado.`;
@@ -1184,8 +1187,7 @@ async function executeTool(
                     step: 'direct_connect',
                     options_type: 'none',
                     options: [],
-                    message: 'La cuenta de LinkedIn se conectó directamente como cuenta personal (sin organizaciones disponibles).',
-                    connected: true,
+                    message: 'La cuenta de LinkedIn se conectó directamente como cuenta personal (sin organizaciones disponibles). La conexión está completa.',
                   }),
                   publishPostCalled: false,
                   shouldClearOAuthCookie: true,
@@ -1194,11 +1196,10 @@ async function executeTool(
                 };
               }
 
-              // ⚠️ IMPORTANTE: Este endpoint es de UN SOLO USO
               const linkedInData = await getLinkedInPendingData(pendingDataToken);
 
               if (!linkedInData.organizations || linkedInData.organizations.length === 0) {
-                // Sin organizaciones → conectar como personal automáticamente
+                // No tiene organizaciones → conectar como personal automáticamente
                 if (connectToken) {
                   await saveLinkedInOrganization(
                     profileId,
@@ -1225,13 +1226,11 @@ async function executeTool(
                 };
               }
 
-              // Tiene organizaciones → mostrar opciones
-              // Cachear _linkedin_data porque pendingDataToken ya fue consumido
-              const linkedInCacheForTool = {
-                tempToken: linkedInData.tempToken,
-                userProfile: linkedInData.userProfile,
-                organizations: linkedInData.organizations,
-              };
+              // Tiene organizaciones → mostrar opciones al cliente
+              const liOptions = [
+                { id: 'personal', name: `Cuenta personal (${linkedInData.userProfile.displayName})` },
+                ...linkedInData.organizations.map(o => ({ id: o.id, name: o.name })),
+              ];
 
               return {
                 result: JSON.stringify({
@@ -1239,22 +1238,22 @@ async function executeTool(
                   platform,
                   step,
                   options_type: 'organizations',
-                  options: [
-                    { id: 'personal', name: `Cuenta personal (${linkedInData.userProfile.displayName})`, type: 'personal' },
-                    ...linkedInData.organizations.map(org => ({
-                      id: org.id,
-                      name: org.name,
-                      urn: org.urn,
-                      type: 'organization',
-                    })),
-                  ],
-                  _linkedin_data: linkedInCacheForTool,
-                  message: `Se encontraron ${linkedInData.organizations.length} organización(es) de LinkedIn. El cliente puede elegir su cuenta personal o una organización. IMPORTANTE: Cuando llames complete_connection, incluye _linkedin_data tal como está aquí.`,
+                  options: liOptions,
+                  message: `Se encontraron ${linkedInData.organizations.length} organización(es) de LinkedIn, más la opción de cuenta personal. IMPORTANTE: Cuando llame complete_connection, DEBE incluir _linkedin_data tal cual se devuelve aquí.`,
+                  _linkedin_data: {
+                    tempToken: linkedInData.tempToken,
+                    userProfile: linkedInData.userProfile,
+                    organizations: linkedInData.organizations,
+                  },
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
-                linkedInDataToCache: linkedInCacheForTool,
-                connectionOptionsToCache: null,
+                linkedInDataToCache: {
+                  tempToken: linkedInData.tempToken,
+                  userProfile: linkedInData.userProfile,
+                  organizations: linkedInData.organizations,
+                },
+                connectionOptionsToCache: liOptions,
               };
             }
 
@@ -1272,23 +1271,23 @@ async function executeTool(
                 };
               }
               const pinResult = await getPinterestBoards(profileId, tempToken, connectToken);
+              const pinOptions = pinResult.boards.map(b => ({
+                id: b.id,
+                name: b.name,
+              }));
               return {
                 result: JSON.stringify({
                   success: true,
                   platform,
                   step,
                   options_type: 'boards',
-                  options: pinResult.boards.map(b => ({
-                    id: b.id,
-                    name: b.name,
-                    description: b.description || '',
-                  })),
-                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente.`,
+                  options: pinOptions,
+                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest.`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
-                connectionOptionsToCache: null,
+                connectionOptionsToCache: pinOptions,
               };
             }
 
@@ -1305,42 +1304,54 @@ async function executeTool(
                   connectionOptionsToCache: null,
                 };
               }
-              const gmbResult = await getGoogleBusinessLocations(profileId, tempToken, connectToken);
+              const gbResult = await getGoogleBusinessLocations(profileId, tempToken, connectToken);
+              const gbOptions = gbResult.locations.map(l => ({
+                id: l.id,
+                name: l.name,
+              }));
               return {
                 result: JSON.stringify({
                   success: true,
                   platform,
                   step,
                   options_type: 'locations',
-                  options: gmbResult.locations.map(l => ({
-                    id: l.id,
-                    name: l.name,
-                    address: l.address || '',
-                  })),
-                  message: `Se encontraron ${gmbResult.locations.length} ubicación(es) de Google Business. Muestre las opciones al cliente.`,
+                  options: gbOptions,
+                  message: `Se encontraron ${gbResult.locations.length} ubicación(es) de Google Business.`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
-                connectionOptionsToCache: null,
+                connectionOptionsToCache: gbOptions,
               };
             }
 
             case 'snapchat': {
-              const publicProfiles = pending.publicProfiles || [];
+              // Snapchat: guardar perfil público directamente
+              if (!tempToken || !connectToken) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan tokens para Snapchat. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                  connectionOptionsToCache: null,
+                };
+              }
               return {
                 result: JSON.stringify({
                   success: true,
                   platform,
                   step,
-                  options_type: 'public_profiles',
-                  options: Array.isArray(publicProfiles) ? publicProfiles : [],
-                  message: `Se encontraron ${Array.isArray(publicProfiles) ? publicProfiles.length : 0} perfil(es) público(s) de Snapchat. Muestre las opciones al cliente.`,
+                  options_type: 'profiles',
+                  options: [{ id: 'public_profile', name: 'Perfil público de Snapchat' }],
+                  message: 'Snapchat requiere seleccionar el perfil público para completar la conexión.',
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
                 linkedInDataToCache: null,
-                connectionOptionsToCache: null,
+                connectionOptionsToCache: [{ id: 'public_profile', name: 'Perfil público de Snapchat' }],
               };
             }
 
@@ -1348,7 +1359,7 @@ async function executeTool(
               return {
                 result: JSON.stringify({
                   success: false,
-                  error: `Plataforma headless no soportada: ${platform}`,
+                  error: `Plataforma no soportada para conexión headless: ${platform}`,
                 }),
                 publishPostCalled: false,
                 shouldClearOAuthCookie: false,
@@ -1357,7 +1368,7 @@ async function executeTool(
               };
           }
         } catch (error) {
-          console.error(`[Pioneer] Error en get_pending_connection para ${platform}:`, error);
+          console.error(`[Pioneer] Error obteniendo opciones para ${platform}:`, error);
 
           if (error instanceof LateApiError && (error.status === 401 || error.status === 403)) {
             return {
@@ -1367,22 +1378,13 @@ async function executeTool(
                 expired: true,
               }),
               publishPostCalled: false,
-              shouldClearOAuthCookie: true, // Limpiar cookie expirada
+              shouldClearOAuthCookie: true,
               linkedInDataToCache: null,
               connectionOptionsToCache: null,
             };
           }
 
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: `Error al obtener opciones: ${error instanceof Error ? error.message : 'Error desconocido'}`,
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          throw error;
         }
       }
 
@@ -1413,37 +1415,11 @@ async function executeTool(
           };
         }
 
-        const { profileId, tempToken, connectToken, userProfile } = pending;
-        let { selection_id } = input;
-        const { selection_name } = input;
-        const platform = input.platform || pending.platform;
+        const { platform, profileId, tempToken, connectToken, userProfile } = pending;
+        const { selection_id, selection_name } = input;
 
-        console.log(`[Pioneer] complete_connection: ${platform} → ${selection_id} (${selection_name})`);
-        console.log(`[Pioneer] Cookie data — profileId: ${profileId}, tempToken: ${tempToken ? tempToken.substring(0, 20) + '...' : 'NULL'}, connectToken: ${connectToken ? connectToken.substring(0, 20) + '...' : 'NULL'}, userProfile: ${userProfile ? JSON.stringify(userProfile).substring(0, 100) : 'NULL'}`);
+        console.log(`[Pioneer] complete_connection: ${platform}, selection: ${selection_id} (${selection_name})`);
 
-        // === AUTO-CORRECCIÓN: Si Claude alucinó un selection_id, usar el correcto del cache ===
-        if (cachedConnectionOptions && cachedConnectionOptions.length > 0) {
-          const exactMatch = cachedConnectionOptions.find(o => o.id === selection_id);
-          if (!exactMatch) {
-            // Claude usó un ID que no existe en las opciones reales
-            // Intentar match por nombre
-            const nameMatch = selection_name
-              ? cachedConnectionOptions.find(o => o.name.toLowerCase() === selection_name.toLowerCase())
-              : null;
-
-            if (nameMatch) {
-              console.warn(`[Pioneer] ⚠️ AUTO-CORRECCIÓN: selection_id "${selection_id}" no encontrado. Corregido a "${nameMatch.id}" por match de nombre "${nameMatch.name}"`);
-              selection_id = nameMatch.id;
-            } else if (cachedConnectionOptions.length === 1) {
-              // Solo hay una opción — usar esa
-              console.warn(`[Pioneer] ⚠️ AUTO-CORRECCIÓN: selection_id "${selection_id}" no encontrado. Solo hay 1 opción disponible, usando "${cachedConnectionOptions[0].id}" (${cachedConnectionOptions[0].name})`);
-              selection_id = cachedConnectionOptions[0].id;
-            } else {
-              console.warn(`[Pioneer] ⚠️ selection_id "${selection_id}" no coincide con ninguna opción conocida. Opciones: ${JSON.stringify(cachedConnectionOptions)}`);
-              // Continuar con el ID que Claude proporcionó — Late.dev dará el error real
-            }
-          }
-        }
         try {
           switch (platform) {
             case 'facebook':
@@ -1461,33 +1437,42 @@ async function executeTool(
                 };
               }
 
-              // === VALIDACIÓN: Re-fetch pages para verificar/corregir el selection_id ===
-              // Claude frecuentemente alucina page IDs — verificamos contra Late.dev
+              // === BUG 8.5 FIX: Re-fetch pages para validar selection_id ===
+              let validatedSelectionId = selection_id;
               try {
-                const pagesCheck = await getFacebookPages(profileId, tempToken, connectToken);
-                const realPages = pagesCheck.pages;
+                const fbPages = await getFacebookPages(profileId, tempToken, connectToken);
+                const realPages = fbPages.pages;
+
                 const exactMatch = realPages.find(p => p.id === selection_id);
+                if (!exactMatch) {
+                  console.warn(`[Pioneer] ⚠️ selection_id "${selection_id}" no coincide con ninguna page real. Intentando auto-corrección...`);
 
-                if (!exactMatch && realPages.length > 0) {
-                  const nameMatch = selection_name
-                    ? realPages.find(p => p.name.toLowerCase() === (selection_name || '').toLowerCase())
-                    : null;
+                  // Intentar match por nombre
+                  if (selection_name) {
+                    const nameMatch = realPages.find(p =>
+                      p.name.toLowerCase() === selection_name.toLowerCase()
+                    );
+                    if (nameMatch) {
+                      console.log(`[Pioneer] ⚠️ CORRECCIÓN FB: ID "${selection_id}" → "${nameMatch.id}" (match por nombre: "${nameMatch.name}")`);
+                      validatedSelectionId = nameMatch.id;
+                    }
+                  }
 
-                  if (nameMatch) {
-                    console.warn(`[Pioneer] ⚠️ CORRECCIÓN FB: ID "${selection_id}" → "${nameMatch.id}" (match por nombre "${nameMatch.name}")`);
-                    selection_id = nameMatch.id;
-                  } else if (realPages.length === 1) {
-                    console.warn(`[Pioneer] ⚠️ CORRECCIÓN FB: ID "${selection_id}" → "${realPages[0].id}" (única página: "${realPages[0].name}")`);
-                    selection_id = realPages[0].id;
-                  } else {
-                    console.warn(`[Pioneer] ⚠️ Page ID "${selection_id}" no encontrado. Pages: ${JSON.stringify(realPages.map(p => ({ id: p.id, name: p.name })))}`);
+                  // Si solo hay 1 page, usar esa
+                  if (validatedSelectionId === selection_id && realPages.length === 1) {
+                    console.log(`[Pioneer] ⚠️ CORRECCIÓN FB: ID "${selection_id}" → "${realPages[0].id}" (única page disponible: "${realPages[0].name}")`);
+                    validatedSelectionId = realPages[0].id;
+                  }
+
+                  if (validatedSelectionId === selection_id) {
+                    console.warn(`[Pioneer] ⚠️ No se pudo auto-corregir. Intentando con ID original. Pages: ${JSON.stringify(realPages.map(p => ({ id: p.id, name: p.name })))}`);
                   }
                 }
               } catch (fetchErr) {
                 console.warn('[Pioneer] No se pudieron re-fetch pages para validación:', fetchErr);
               }
 
-              await saveFacebookPage(profileId, selection_id, tempToken, userProfile, connectToken);
+              await saveFacebookPage(profileId, validatedSelectionId, tempToken, userProfile, connectToken);
               return {
                 result: JSON.stringify({
                   success: true,
@@ -1542,7 +1527,7 @@ async function executeTool(
                   success: true,
                   platform,
                   message: isPersonal
-                    ? `LinkedIn conectado como cuenta personal.`
+                    ? `LinkedIn conectado como cuenta personal de ${liData.userProfile.displayName || 'usuario'}.`
                     : `LinkedIn conectado como organización "${selectedOrg?.name || selection_id}".`,
                   connected: true,
                 }),
@@ -1669,7 +1654,7 @@ async function executeTool(
               };
           }
         } catch (error) {
-          console.error(`[Pioneer] Error en complete_connection para ${platform}:`, error);
+          console.error(`[Pioneer] Error completando conexión para ${platform}:`, error);
 
           if (error instanceof LateApiError && (error.status === 401 || error.status === 403)) {
             return {
@@ -1685,22 +1670,15 @@ async function executeTool(
             };
           }
 
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: `Error al completar conexión: ${error instanceof Error ? error.message : 'Error desconocido'}`,
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          throw error;
         }
       }
 
       default:
         return {
-          result: JSON.stringify({ error: `Tool desconocida: ${toolName}` }),
+          result: JSON.stringify({
+            error: `Tool desconocida: ${toolName}`,
+          }),
           publishPostCalled: false,
           shouldClearOAuthCookie: false,
           linkedInDataToCache: null,
@@ -1708,10 +1686,11 @@ async function executeTool(
         };
     }
   } catch (error) {
-    console.error(`Error ejecutando tool ${toolName}:`, error);
+    console.error(`[Pioneer] Error ejecutando tool ${toolName}:`, error);
     return {
       result: JSON.stringify({
-        error: `Error al ejecutar ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+        success: false,
+        error: `Error ejecutando ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
       }),
       publishPostCalled: false,
       shouldClearOAuthCookie: false,
@@ -1753,7 +1732,8 @@ export async function POST(request: NextRequest) {
       console.log(`[Pioneer] Cookies en request (${allCookies.length}):`, allCookies.map(c => c.name));
       
       pendingOAuthData = getOAuthCookie(request);
-      console.log(`[Pioneer] OAuth cookie leída:`, pendingOAuthData ? `platform=${pendingOAuthData.platform}, step=${pendingOAuthData.step}` : 'null');
+      console.log(`[Pioneer] OAuth cookie leída:`, pendingOAuthData ? 
+        `platform=${pendingOAuthData.platform}, step=${pendingOAuthData.step}` : 'null');
     } catch (error) {
       console.warn('[Pioneer] No se pudo leer OAuth cookie:', error);
     }
@@ -1849,23 +1829,17 @@ export async function POST(request: NextRequest) {
             message:
               finalTextParts.join('\n\n') ||
               'Error interno: tool_use sin herramientas.',
-            usage: response.usage,
           });
         }
 
-        // Ejecutar cada tool y recoger resultados
+        // Procesar cada tool_use block
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
         for (const toolBlock of toolUseBlocks) {
           console.log(
             `[Pioneer] Ejecutando tool: ${toolBlock.name}`,
-            toolBlock.input
+            JSON.stringify(toolBlock.input).substring(0, 200)
           );
-
-          // Tracking: marcar si generate_image fue llamada
-          if (toolBlock.name === 'generate_image') {
-            generateImageWasCalled = true;
-          }
 
           const toolResult = await executeTool(
             toolBlock.name,
@@ -1879,40 +1853,36 @@ export async function POST(request: NextRequest) {
             cachedConnectionOptions
           );
 
-          // Tracking: capturar URLs de imagen para reutilizar en retry de alucinación
+          // Actualizar tracking
           if (toolBlock.name === 'generate_image') {
+            generateImageWasCalled = true;
             try {
-              const parsed = JSON.parse(toolResult.result);
-              if (parsed.success && parsed.images?.length > 0) {
-                lastGeneratedImageUrls = parsed.images;
+              const imgResult = JSON.parse(toolResult.result);
+              if (imgResult.success && imgResult.images) {
+                lastGeneratedImageUrls = imgResult.images;
+              } else if (imgResult.success && imgResult.image_url) {
+                lastGeneratedImageUrls = [imgResult.image_url];
               }
-            } catch { /* ignore parse errors */ }
+            } catch {
+              // No-op: si no se puede parsear, mantener tracking anterior
+            }
           }
 
-          // Tracking: contar publish_post EXITOSOS
           if (toolResult.publishPostCalled) {
-            publishPostCount++;
+            publishPostCount += 1;
           }
 
-          // Tracking: OAuth cookie clearing
           if (toolResult.shouldClearOAuthCookie) {
             shouldClearOAuthCookie = true;
           }
 
-          // Tracking: LinkedIn cached data
           if (toolResult.linkedInDataToCache) {
             linkedInCachedData = toolResult.linkedInDataToCache;
           }
 
-          // Tracking: Connection options cache (for auto-correction in complete_connection)
           if (toolResult.connectionOptionsToCache) {
             cachedConnectionOptions = toolResult.connectionOptionsToCache;
           }
-
-          console.log(
-            `[Pioneer] Resultado de ${toolBlock.name}:`,
-            toolResult.result.substring(0, 200)
-          );
 
           toolResults.push({
             type: 'tool_result',
@@ -1921,51 +1891,34 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        // Agregar respuesta de Claude y resultados al historial
+        // Agregar respuesta de Claude + tool_results a messages
         currentMessages = [
           ...currentMessages,
           { role: 'assistant' as const, content: response.content },
-          { role: 'user' as const, content: toolResults },
+          {
+            role: 'user' as const,
+            content: toolResults,
+          },
         ];
-
-        continue;
       }
-
-      // Cualquier otro stop_reason (max_tokens, etc.)
-      return NextResponse.json({
-        message:
-          finalTextParts.join('\n\n') ||
-          'La respuesta fue cortada. Intente de nuevo con una pregunta más específica.',
-        usage: response.usage,
-      });
     }
 
-    // Excedimos el máximo de iteraciones
-    const jsonResponse = NextResponse.json({
+    // Si llegamos aquí, agotamos las iteraciones
+    return NextResponse.json({
       message:
-        finalTextParts.join('\n\n') +
-        '\n\n⚠️ Se alcanzó el límite de acciones por mensaje. Si necesita más, envíe otro mensaje.',
-      usage: { input_tokens: 0, output_tokens: 0 },
+        finalTextParts.join('\n\n') ||
+        'Lo siento, la operación tomó demasiados pasos. Por favor intente de nuevo con una solicitud más simple.',
     });
-
-    if (shouldClearOAuthCookie) {
-      jsonResponse.cookies.set(COOKIE_NAME, '', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
-        maxAge: 0,
-      });
-    }
-
-    return jsonResponse;
   } catch (error) {
-    console.error('Error en API de chat:', error);
+    console.error('[Pioneer] Error en POST /api/chat:', error);
 
     if (error instanceof Anthropic.APIError) {
       return NextResponse.json(
-        { error: `Error de API: ${error.message}` },
-        { status: error.status || 500 }
+        {
+          error: `Error de Claude API: ${error.message}`,
+          status: error.status,
+        },
+        { status: 502 }
       );
     }
 
