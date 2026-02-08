@@ -12,9 +12,22 @@ import {
   getNextOptimalTime,
   PR_TIMEZONE,
   LateApiError,
+  // Headless OAuth functions
+  isHeadlessPlatform,
+  getFacebookPages,
+  getLinkedInPendingData,
+  saveLinkedInOrganization,
+  saveFacebookPage,
+  getPinterestBoards,
+  savePinterestBoard,
+  getGoogleBusinessLocations,
+  saveGoogleBusinessLocation,
+  saveSnapchatProfile,
 } from '@/lib/late-client';
 import { generateContent, PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
 import { generateImage, suggestAspectRatio, buildImagePrompt } from '@/lib/replicate-client';
+import { getOAuthCookieFromHeaders, COOKIE_NAME } from '@/lib/oauth-cookie';
+import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform, LatePlatformTarget } from '@/lib/types';
 
 // Inicializar cliente de Anthropic
@@ -54,7 +67,7 @@ function detectPublishHallucination(text: string, publishPostCount: number): boo
   return PUBLISH_HALLUCINATION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-// === SYSTEM PROMPT OPTIMIZADO v4 ===
+// === SYSTEM PROMPT v5 — CON OAUTH HEADLESS ===
 function buildSystemPrompt(): string {
   const fechaActual = getCurrentDateForPrompt();
 
@@ -145,15 +158,54 @@ Frases ambiguas ("Se ve bien", "Ok", "Interesante") → preguntar: "¿Desea que 
 
 Cuando el cliente aprueba, tu respuesta DEBE incluir un tool_use block para publish_post. NO respondas solo con texto.
 
+=== CONEXIÓN DE REDES SOCIALES (OAuth) ===
+
+Tienes 2 tools para manejar la conexión de cuentas de redes sociales:
+
+**Flujo para plataformas SIMPLES** (Twitter, TikTok, YouTube, Threads, Reddit):
+1. Usa generate_connect_url → devuelve un authUrl
+2. Muestra el enlace al cliente: "Abra este enlace para conectar su cuenta: [authUrl]"
+3. El cliente autoriza → regresa al chat → la cuenta queda conectada automáticamente
+4. Verificar con list_connected_accounts
+
+**Flujo para plataformas HEADLESS** (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat):
+Estas plataformas requieren un paso adicional de selección (página, organización, board, ubicación).
+
+1. Usa generate_connect_url → devuelve authUrl (el modo headless se activa automáticamente)
+2. Muestra el enlace al cliente
+3. El cliente autoriza → regresa al chat → verás un mensaje automático: "Acabo de autorizar [plataforma]..."
+4. Cuando veas ese mensaje, INMEDIATAMENTE llama get_pending_connection
+5. get_pending_connection devuelve las opciones disponibles (páginas, organizaciones, etc.)
+6. Muestra las opciones al cliente en una lista numerada
+7. El cliente selecciona una opción (ej: "la número 1", "Mi Panadería")
+8. Llama complete_connection con el selection_id de la opción elegida
+9. Confirma la conexión al cliente
+
+**LinkedIn tiene un caso especial:**
+- get_pending_connection puede devolver _linkedin_data en la respuesta
+- Cuando llames complete_connection para LinkedIn, DEBES incluir ese _linkedin_data tal cual
+- Esto es porque el token de LinkedIn es de un solo uso y ya fue consumido al obtener opciones
+
+**Bluesky** (sin OAuth): Pedir handle + App Password, usar generate_connect_url con esos datos.
+**Telegram** (sin OAuth): Pedir bot token al cliente.
+
+**Reglas de conexión:**
+- Si el mensaje del cliente contiene "Acabo de autorizar" o "pending_connection", llama get_pending_connection INMEDIATAMENTE
+- Los tokens de autorización expiran en 10 minutos — actúa rápido
+- Si get_pending_connection dice "expired" o no hay conexión pendiente, pedir al cliente que intente conectar de nuevo
+- NUNCA asumas que una cuenta está conectada — siempre verifica con list_connected_accounts
+
 === TOOLS ===
 
-Tienes 5 herramientas:
+Tienes 7 herramientas:
 
 1. **list_connected_accounts** — Verificar redes conectadas. Usar ANTES de proponer plan o publicar.
-2. **generate_connect_url** — Generar enlace OAuth para conectar red social.
+2. **generate_connect_url** — Generar enlace OAuth para conectar red social. Para plataformas headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat), el modo headless se activa automáticamente.
 3. **generate_content** — Generar texto de post por plataforma. Usar después de aprobación del plan.
 4. **generate_image** — Generar imagen AI (FLUX). Prompt en INGLÉS. Devuelve URL real (https://replicate.delivery/...). Incluir "no text overlay" en prompt.
 5. **publish_post** — Publicar o programar post. DEBES llamar esta tool para publicar. NUNCA confirmes publicación sin haberla llamado.
+6. **get_pending_connection** — Obtener opciones de selección para conexión headless (páginas de Facebook, organizaciones de LinkedIn, boards de Pinterest, ubicaciones de Google Business, perfiles de Snapchat). Llamar INMEDIATAMENTE cuando el cliente regresa de autorizar una plataforma headless.
+7. **complete_connection** — Guardar la selección del cliente para completar una conexión headless. Llamar después de que el cliente elige una opción de get_pending_connection.
 
 Sobre imágenes:
 - Para incluir imagen en un post, PRIMERO llamar generate_image para obtener URL real
@@ -162,7 +214,7 @@ Sobre imágenes:
 - Aspect ratio: Instagram 4:5, Facebook 1:1, Twitter 16:9, TikTok 9:16. Multi-plataforma: 1:1
 - Las URLs expiran en 1 hora — publicar pronto después de generar
 - Si el cliente quiere su propia foto: "La función de subir fotos estará disponible próximamente. Puedo generar una imagen AI o publicar solo con texto."
-- Si el resultado de generate_image incluye _note_for_pioneer con "regenerated", informa al cliente que la primera imagen no fue accesible y se regeneró, con el costo total actualizado. Ejemplo: "La primera imagen generada no fue accesible, así que generé una nueva. El costo total de imagen fue de $0.030 en vez de $0.015."
+- Si el resultado de generate_image incluye _note_for_pioneer con "regenerated", informa al cliente que la primera imagen no fue accesible y se regeneró, con el costo total actualizado.
 - NUNCA llames generate_image dos veces para el mismo post. Si ya generaste una imagen y el cliente la aprobó, usa esa misma URL en publish_post.
 
 === TIPOS DE CONTENIDO ===
@@ -210,7 +262,7 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_connect_url',
     description:
-      'Genera un enlace OAuth para conectar una red social del cliente. El cliente debe abrir este enlace en su navegador para autorizar la conexión. Úsala cuando el cliente quiere conectar una nueva plataforma.',
+      'Genera un enlace OAuth para conectar una red social del cliente. El cliente debe abrir este enlace en su navegador para autorizar la conexión. Para plataformas headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat), el modo headless se activa automáticamente y el cliente será redirigido al chat para completar la selección.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -416,6 +468,60 @@ const PIONEER_TOOLS: Anthropic.Tool[] = [
       required: ['content', 'platforms'],
     },
   },
+  // === NUEVAS TOOLS: OAuth Headless ===
+  {
+    name: 'get_pending_connection',
+    description:
+      'Obtiene las opciones de selección para completar una conexión de red social headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat). Llámala INMEDIATAMENTE cuando el cliente regresa de autorizar una plataforma headless (verás un mensaje como "Acabo de autorizar [plataforma]. Necesito completar la conexión."). Devuelve las páginas, organizaciones, boards, ubicaciones o perfiles disponibles para que el cliente elija.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'complete_connection',
+    description:
+      'Completa una conexión headless guardando la selección del cliente (la página, organización, board, ubicación o perfil que eligió). Llámala después de que el cliente selecciona una opción de las devueltas por get_pending_connection. Para LinkedIn, DEBES incluir _linkedin_data si fue devuelto por get_pending_connection.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        platform: {
+          type: 'string',
+          enum: ['facebook', 'instagram', 'linkedin', 'pinterest', 'googlebusiness', 'snapchat'],
+          description: 'La plataforma para la que se completa la conexión',
+        },
+        selection_id: {
+          type: 'string',
+          description: 'El ID de la opción seleccionada por el cliente (page ID, organization ID, board ID, location ID, o profile ID)',
+        },
+        selection_name: {
+          type: 'string',
+          description: 'El nombre de la opción seleccionada (para confirmación al cliente)',
+        },
+        _linkedin_data: {
+          type: 'object',
+          description: 'Datos de LinkedIn devueltos por get_pending_connection. OBLIGATORIO para LinkedIn porque el token es de un solo uso.',
+          properties: {
+            tempToken: { type: 'string' },
+            userProfile: { type: 'object' },
+            organizations: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  urn: { type: 'string' },
+                  name: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+      required: ['platform', 'selection_id'],
+    },
+  },
 ];
 
 // === LIMPIAR MARKDOWN PARA REDES SOCIALES ===
@@ -432,7 +538,6 @@ function stripMarkdown(text: string): string {
 }
 
 // === VALIDACIÓN PREVENTIVA PARA PUBLISH_POST ===
-// Verifica account_ids, auto-corrige si es necesario, valida contenido
 
 interface ValidatedPublishData {
   content: string;
@@ -464,9 +569,6 @@ async function validateAndPreparePublish(
   const corrections: string[] = [];
 
   // --- 0. Validar media_urls vs generate_image tracking ---
-  // FIX: Permitir URLs legítimas de replicate.delivery aunque generate_image
-  // no se haya llamado en ESTE request (pudo haberse llamado en un request anterior).
-  // Solo rechazar URLs que NO sean de replicate.delivery cuando generate_image no fue llamada.
   if (input.media_urls?.length && !generateImageWasCalled) {
     const allFromReplicate = input.media_urls.every(url =>
       url.startsWith('https://replicate.delivery/')
@@ -478,7 +580,6 @@ async function validateAndPreparePublish(
         corrections: ['media_urls rechazadas: URLs no son de replicate.delivery y generate_image no fue llamada en esta sesión'],
       };
     }
-    // URLs de replicate.delivery son legítimas de un request anterior — permitir
     corrections.push('media_urls de replicate.delivery aceptadas de request anterior (generate_image no fue llamada en este request)');
   }
 
@@ -569,7 +670,7 @@ async function validateAndPreparePublish(
   }
 
   // --- 5. Validar media_urls — SOLO permitir http:// y https:// ---
-  let validMediaUrls: string[] = [];
+  const validMediaUrls: string[] = [];
   if (input.media_urls?.length) {
     for (const url of input.media_urls) {
       if (url.startsWith('http://') || url.startsWith('https://')) {
@@ -660,8 +761,16 @@ async function executeTool(
   generateImageWasCalled: boolean,
   publishPostCount: number,
   hallucinationRetryUsed: boolean,
-  lastGeneratedImageUrl: string | null
-): Promise<{ result: string; publishPostCalled: boolean }> {
+  lastGeneratedImageUrl: string | null,
+  // OAuth headless context
+  pendingOAuthData: OAuthPendingData | null,
+  linkedInCachedData: Record<string, unknown> | null
+): Promise<{
+  result: string;
+  publishPostCalled: boolean;
+  shouldClearOAuthCookie: boolean;
+  linkedInDataToCache: Record<string, unknown> | null;
+}> {
   try {
     switch (toolName) {
       case 'list_connected_accounts': {
@@ -673,6 +782,8 @@ async function executeTool(
             count: result.accounts.length,
           }),
           publishPostCalled: false,
+          shouldClearOAuthCookie: false,
+          linkedInDataToCache: null,
         };
       }
 
@@ -685,13 +796,23 @@ async function executeTool(
           input.platform as Platform,
           input.profile_id
         );
+
+        // Informar a Pioneer si es headless para que sepa esperar
+        const headless = isHeadlessPlatform(input.platform);
+
         return {
           result: JSON.stringify({
             success: true,
             authUrl: result.authUrl,
             platform: input.platform,
+            headless,
+            ...(headless && {
+              _note_for_pioneer: `Esta plataforma (${input.platform}) usa modo headless. Después de que el cliente autorice, regresará al chat con un mensaje automático. En ese momento debes llamar get_pending_connection para obtener las opciones de selección.`,
+            }),
           }),
           publishPostCalled: false,
+          shouldClearOAuthCookie: false,
+          linkedInDataToCache: null,
         };
       }
 
@@ -717,14 +838,13 @@ async function executeTool(
         return {
           result: JSON.stringify(result),
           publishPostCalled: false,
+          shouldClearOAuthCookie: false,
+          linkedInDataToCache: null,
         };
       }
 
       case 'generate_image': {
         // === FIX BUG 8.1: Bloquear regeneración en retry de alucinación ===
-        // Si estamos en retry de alucinación y ya tenemos una imagen generada,
-        // retornar la URL guardada sin llamar a Replicate de nuevo.
-        // Esto evita el "image swap" donde Claude genera una imagen diferente.
         if (hallucinationRetryUsed && lastGeneratedImageUrl) {
           console.log(`[Pioneer] Reutilizando imagen existente en retry de alucinación: ${lastGeneratedImageUrl.substring(0, 80)}...`);
           return {
@@ -740,6 +860,8 @@ async function executeTool(
               _note: 'Imagen reutilizada del intento anterior (no se generó una nueva)',
             }),
             publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
           };
         }
 
@@ -765,11 +887,12 @@ async function executeTool(
         return {
           result: JSON.stringify(resultObj),
           publishPostCalled: false,
+          shouldClearOAuthCookie: false,
+          linkedInDataToCache: null,
         };
       }
 
       case 'publish_post': {
-
         // === LÍMITE: MÁXIMO 1 publish_post POR REQUEST ===
         if (publishPostCount >= 1) {
           return {
@@ -778,6 +901,8 @@ async function executeTool(
               error: 'Solo puedes publicar 1 post por mensaje. Para publicar el siguiente post, espera a que el cliente envíe un nuevo mensaje confirmando que desea continuar.',
             }),
             publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
           };
         }
 
@@ -791,8 +916,6 @@ async function executeTool(
         };
 
         // === FIX BUG 8.1b: Inyectar imagen automáticamente en retry de alucinación ===
-        // Si estamos en retry de alucinación y hay una imagen guardada pero Claude
-        // no incluyó media_urls, agregar la imagen automáticamente.
         if (hallucinationRetryUsed && lastGeneratedImageUrl && (!input.media_urls || input.media_urls.length === 0)) {
           console.log(`[Pioneer] Inyectando imagen guardada en publish_post durante retry: ${lastGeneratedImageUrl.substring(0, 80)}...`);
           input.media_urls = [lastGeneratedImageUrl];
@@ -809,6 +932,8 @@ async function executeTool(
               corrections: validation.corrections,
             }),
             publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
           };
         }
 
@@ -820,7 +945,6 @@ async function executeTool(
         try {
           const result = await publishWithRetry(validation.data);
 
-          // Determinar si se incluyó imagen
           const imageIncluded = !!(validation.data.mediaItems && validation.data.mediaItems.length > 0);
 
           return {
@@ -841,6 +965,8 @@ async function executeTool(
                 }),
             }),
             publishPostCalled: true,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
           };
         } catch (publishError) {
           console.error('[Pioneer] Publicación falló después de validación y retry:', publishError);
@@ -859,6 +985,515 @@ async function executeTool(
               corrections: validation.corrections,
             }),
             publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
+          };
+        }
+      }
+
+      // ============================================================
+      // === NUEVAS TOOLS: OAuth Headless ===
+      // ============================================================
+
+      case 'get_pending_connection': {
+        // Leer cookie OAuth pendiente
+        const pending = pendingOAuthData;
+
+        if (!pending) {
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: 'No hay conexión pendiente. La sesión de autorización pudo haber expirado (10 minutos). El cliente debe intentar conectar la plataforma de nuevo usando generate_connect_url.',
+            }),
+            publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
+          };
+        }
+
+        const { platform, step, profileId, tempToken, connectToken, pendingDataToken } = pending;
+
+        console.log(`[Pioneer] get_pending_connection: ${platform} (step: ${step})`);
+
+        try {
+          switch (platform) {
+            case 'facebook':
+            case 'instagram': {
+              if (!tempToken || !connectToken) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan tokens para obtener páginas de Facebook. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+              const fbResult = await getFacebookPages(profileId, tempToken, connectToken);
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  step,
+                  options_type: 'pages',
+                  options: fbResult.pages.map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    username: p.username || '',
+                    category: p.category || '',
+                  })),
+                  message: `Se encontraron ${fbResult.pages.length} página(s) de Facebook. Muestre las opciones al cliente para que elija una.`,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: false,
+                linkedInDataToCache: null,
+              };
+            }
+
+            case 'linkedin': {
+              if (!pendingDataToken) {
+                // Sin pendingDataToken = se conectó directamente como personal
+                return {
+                  result: JSON.stringify({
+                    success: true,
+                    platform,
+                    step: 'direct_connect',
+                    options_type: 'none',
+                    options: [],
+                    message: 'La cuenta de LinkedIn se conectó directamente como cuenta personal (sin organizaciones disponibles).',
+                    connected: true,
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: true,
+                  linkedInDataToCache: null,
+                };
+              }
+
+              // ⚠️ IMPORTANTE: Este endpoint es de UN SOLO USO
+              const linkedInData = await getLinkedInPendingData(pendingDataToken);
+
+              if (!linkedInData.organizations || linkedInData.organizations.length === 0) {
+                // Sin organizaciones → conectar como personal automáticamente
+                if (connectToken) {
+                  await saveLinkedInOrganization(
+                    profileId,
+                    linkedInData.tempToken,
+                    linkedInData.userProfile as Record<string, unknown>,
+                    'personal',
+                    connectToken
+                  );
+                }
+                return {
+                  result: JSON.stringify({
+                    success: true,
+                    platform,
+                    step: 'auto_connected',
+                    options_type: 'none',
+                    options: [],
+                    message: `LinkedIn conectado como cuenta personal de ${linkedInData.userProfile.displayName}. No se encontraron organizaciones.`,
+                    connected: true,
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: true,
+                  linkedInDataToCache: null,
+                };
+              }
+
+              // Tiene organizaciones → mostrar opciones
+              // Cachear _linkedin_data porque pendingDataToken ya fue consumido
+              const linkedInCacheForTool = {
+                tempToken: linkedInData.tempToken,
+                userProfile: linkedInData.userProfile,
+                organizations: linkedInData.organizations,
+              };
+
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  step,
+                  options_type: 'organizations',
+                  options: [
+                    { id: 'personal', name: `Cuenta personal (${linkedInData.userProfile.displayName})`, type: 'personal' },
+                    ...linkedInData.organizations.map(org => ({
+                      id: org.id,
+                      name: org.name,
+                      urn: org.urn,
+                      type: 'organization',
+                    })),
+                  ],
+                  _linkedin_data: linkedInCacheForTool,
+                  message: `Se encontraron ${linkedInData.organizations.length} organización(es) de LinkedIn. El cliente puede elegir su cuenta personal o una organización. IMPORTANTE: Cuando llames complete_connection, incluye _linkedin_data tal como está aquí.`,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: false,
+                linkedInDataToCache: linkedInCacheForTool,
+              };
+            }
+
+            case 'pinterest': {
+              if (!tempToken || !connectToken) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan tokens para obtener boards de Pinterest. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+              const pinResult = await getPinterestBoards(profileId, tempToken, connectToken);
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  step,
+                  options_type: 'boards',
+                  options: pinResult.boards.map(b => ({
+                    id: b.id,
+                    name: b.name,
+                    description: b.description || '',
+                  })),
+                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente.`,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: false,
+                linkedInDataToCache: null,
+              };
+            }
+
+            case 'googlebusiness': {
+              if (!tempToken || !connectToken) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan tokens para obtener ubicaciones de Google Business. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+              const gmbResult = await getGoogleBusinessLocations(profileId, tempToken, connectToken);
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  step,
+                  options_type: 'locations',
+                  options: gmbResult.locations.map(l => ({
+                    id: l.id,
+                    name: l.name,
+                    address: l.address || '',
+                  })),
+                  message: `Se encontraron ${gmbResult.locations.length} ubicación(es) de Google Business. Muestre las opciones al cliente.`,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: false,
+                linkedInDataToCache: null,
+              };
+            }
+
+            case 'snapchat': {
+              const publicProfiles = pending.publicProfiles || [];
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  step,
+                  options_type: 'public_profiles',
+                  options: Array.isArray(publicProfiles) ? publicProfiles : [],
+                  message: `Se encontraron ${Array.isArray(publicProfiles) ? publicProfiles.length : 0} perfil(es) público(s) de Snapchat. Muestre las opciones al cliente.`,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: false,
+                linkedInDataToCache: null,
+              };
+            }
+
+            default:
+              return {
+                result: JSON.stringify({
+                  success: false,
+                  error: `Plataforma headless no soportada: ${platform}`,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: false,
+                linkedInDataToCache: null,
+              };
+          }
+        } catch (error) {
+          console.error(`[Pioneer] Error en get_pending_connection para ${platform}:`, error);
+
+          if (error instanceof LateApiError && (error.status === 401 || error.status === 403)) {
+            return {
+              result: JSON.stringify({
+                success: false,
+                error: 'Los tokens de autorización expiraron. El cliente debe intentar conectar la plataforma de nuevo.',
+                expired: true,
+              }),
+              publishPostCalled: false,
+              shouldClearOAuthCookie: true, // Limpiar cookie expirada
+              linkedInDataToCache: null,
+            };
+          }
+
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: `Error al obtener opciones: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+            }),
+            publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
+          };
+        }
+      }
+
+      case 'complete_connection': {
+        const input = toolInput as {
+          platform: string;
+          selection_id: string;
+          selection_name?: string;
+          _linkedin_data?: {
+            tempToken: string;
+            userProfile: Record<string, unknown>;
+            organizations: Array<{ id: string; urn: string; name: string }>;
+          };
+        };
+
+        const pending = pendingOAuthData;
+
+        if (!pending) {
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: 'No hay conexión pendiente. La sesión pudo haber expirado. El cliente debe intentar conectar de nuevo.',
+            }),
+            publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
+          };
+        }
+
+        const { profileId, tempToken, connectToken, userProfile } = pending;
+        const { selection_id, selection_name } = input;
+        const platform = input.platform || pending.platform;
+
+        console.log(`[Pioneer] complete_connection: ${platform} → ${selection_id} (${selection_name})`);
+
+        try {
+          switch (platform) {
+            case 'facebook':
+            case 'instagram': {
+              if (!tempToken || !connectToken || !userProfile) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan datos para guardar la selección de Facebook. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+              await saveFacebookPage(profileId, selection_id, tempToken, userProfile, connectToken);
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  message: `Página de Facebook "${selection_name || selection_id}" conectada exitosamente.`,
+                  connected: true,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: true,
+                linkedInDataToCache: null,
+              };
+            }
+
+            case 'linkedin': {
+              // LinkedIn: usar _linkedin_data del input O del cache
+              const liData = input._linkedin_data || (linkedInCachedData as {
+                tempToken: string;
+                userProfile: Record<string, unknown>;
+                organizations: Array<{ id: string; urn: string; name: string }>;
+              } | null);
+
+              if (!liData || !connectToken) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan datos de LinkedIn para guardar la selección. Asegúrate de incluir _linkedin_data que devolvió get_pending_connection. El cliente puede necesitar intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+
+              const isPersonal = selection_id === 'personal';
+              const selectedOrg = isPersonal
+                ? undefined
+                : liData.organizations.find(o => o.id === selection_id);
+
+              await saveLinkedInOrganization(
+                profileId,
+                liData.tempToken,
+                liData.userProfile,
+                isPersonal ? 'personal' : 'organization',
+                connectToken,
+                selectedOrg
+              );
+
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  message: isPersonal
+                    ? `LinkedIn conectado como cuenta personal.`
+                    : `LinkedIn conectado como organización "${selectedOrg?.name || selection_id}".`,
+                  connected: true,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: true,
+                linkedInDataToCache: null,
+              };
+            }
+
+            case 'pinterest': {
+              if (!tempToken || !connectToken || !userProfile) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan datos para guardar la selección de Pinterest. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+              await savePinterestBoard(
+                profileId,
+                selection_id,
+                selection_name || selection_id,
+                tempToken,
+                userProfile,
+                connectToken
+              );
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  message: `Board de Pinterest "${selection_name || selection_id}" conectado exitosamente.`,
+                  connected: true,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: true,
+                linkedInDataToCache: null,
+              };
+            }
+
+            case 'googlebusiness': {
+              if (!tempToken || !connectToken || !userProfile) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan datos para guardar la ubicación de Google Business. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+              await saveGoogleBusinessLocation(
+                profileId,
+                selection_id,
+                tempToken,
+                userProfile,
+                connectToken
+              );
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  message: `Ubicación de Google Business "${selection_name || selection_id}" conectada exitosamente.`,
+                  connected: true,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: true,
+                linkedInDataToCache: null,
+              };
+            }
+
+            case 'snapchat': {
+              if (!tempToken || !connectToken || !userProfile) {
+                return {
+                  result: JSON.stringify({
+                    success: false,
+                    error: 'Faltan datos para guardar el perfil de Snapchat. El cliente debe intentar conectar de nuevo.',
+                  }),
+                  publishPostCalled: false,
+                  shouldClearOAuthCookie: false,
+                  linkedInDataToCache: null,
+                };
+              }
+              await saveSnapchatProfile(
+                profileId,
+                selection_id,
+                tempToken,
+                userProfile,
+                connectToken
+              );
+              return {
+                result: JSON.stringify({
+                  success: true,
+                  platform,
+                  message: `Perfil público de Snapchat conectado exitosamente.`,
+                  connected: true,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: true,
+                linkedInDataToCache: null,
+              };
+            }
+
+            default:
+              return {
+                result: JSON.stringify({
+                  success: false,
+                  error: `Plataforma no soportada para completar conexión: ${platform}`,
+                }),
+                publishPostCalled: false,
+                shouldClearOAuthCookie: false,
+                linkedInDataToCache: null,
+              };
+          }
+        } catch (error) {
+          console.error(`[Pioneer] Error en complete_connection para ${platform}:`, error);
+
+          if (error instanceof LateApiError && (error.status === 401 || error.status === 403)) {
+            return {
+              result: JSON.stringify({
+                success: false,
+                error: 'Los tokens de autorización expiraron. El cliente debe intentar conectar la plataforma de nuevo.',
+                expired: true,
+              }),
+              publishPostCalled: false,
+              shouldClearOAuthCookie: true,
+              linkedInDataToCache: null,
+            };
+          }
+
+          return {
+            result: JSON.stringify({
+              success: false,
+              error: `Error al completar conexión: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+            }),
+            publishPostCalled: false,
+            shouldClearOAuthCookie: false,
+            linkedInDataToCache: null,
           };
         }
       }
@@ -867,6 +1502,8 @@ async function executeTool(
         return {
           result: JSON.stringify({ error: `Tool desconocida: ${toolName}` }),
           publishPostCalled: false,
+          shouldClearOAuthCookie: false,
+          linkedInDataToCache: null,
         };
     }
   } catch (error) {
@@ -876,6 +1513,8 @@ async function executeTool(
         error: `Error al ejecutar ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
       }),
       publishPostCalled: false,
+      shouldClearOAuthCookie: false,
+      linkedInDataToCache: null,
     };
   }
 }
@@ -902,6 +1541,16 @@ export async function POST(request: NextRequest) {
       })
     );
 
+    // === LEER COOKIE OAUTH AL INICIO DEL REQUEST ===
+    // Usamos getOAuthCookieFromHeaders() que funciona en Route Handlers
+    // La leemos UNA VEZ y la pasamos a executeTool para evitar múltiples lecturas
+    let pendingOAuthData: OAuthPendingData | null = null;
+    try {
+      pendingOAuthData = await getOAuthCookieFromHeaders();
+    } catch (error) {
+      console.warn('[Pioneer] No se pudo leer OAuth cookie:', error);
+    }
+
     // === LOOP DE TOOL_USE ===
     let currentMessages = [...formattedMessages];
     let finalTextParts: string[] = [];
@@ -911,6 +1560,8 @@ export async function POST(request: NextRequest) {
     let lastGeneratedImageUrl: string | null = null;
     let publishPostCount = 0;
     let hallucinationRetryUsed = false;
+    let shouldClearOAuthCookie = false;
+    let linkedInCachedData: Record<string, unknown> | null = null;
 
     // Generar system prompt con fecha actual
     const systemPrompt = buildSystemPrompt();
@@ -941,14 +1592,12 @@ export async function POST(request: NextRequest) {
           console.warn('[Pioneer] ⚠️ ALUCINACIÓN DETECTADA: Claude dijo "publicado" sin llamar publish_post. Forzando retry.');
           hallucinationRetryUsed = true;
 
-          // Construir mensaje correctivo con la URL de imagen si existe
           let correctiveMessage = 'ERROR DEL SISTEMA: No se ejecutó la publicación. Debes llamar la tool publish_post para publicar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.';
 
           if (lastGeneratedImageUrl) {
             correctiveMessage += ` IMPORTANTE: NO generes una nueva imagen. Usa esta URL que ya generaste: ${lastGeneratedImageUrl}`;
           }
 
-          // Agregar la respuesta de Claude y un mensaje correctivo del sistema
           currentMessages = [
             ...currentMessages,
             { role: 'assistant' as const, content: response.content },
@@ -958,17 +1607,27 @@ export async function POST(request: NextRequest) {
             },
           ];
 
-          // Reset text parts since we're retrying
           finalTextParts = [];
-
-          // Continue the loop — this will make another Claude API call
           continue;
         }
 
-        return NextResponse.json({
+        // === Construir respuesta con cookie clearing si necesario ===
+        const jsonResponse = NextResponse.json({
           message: fullText,
           usage: response.usage,
         });
+
+        if (shouldClearOAuthCookie) {
+          jsonResponse.cookies.set(COOKIE_NAME, '', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/',
+            maxAge: 0,
+          });
+        }
+
+        return jsonResponse;
       }
 
       // Si Claude quiere usar tools, procesarlas
@@ -1000,39 +1659,51 @@ export async function POST(request: NextRequest) {
             generateImageWasCalled = true;
           }
 
-          const { result, publishPostCalled } = await executeTool(
+          const toolResult = await executeTool(
             toolBlock.name,
             toolBlock.input as Record<string, unknown>,
             generateImageWasCalled,
             publishPostCount,
             hallucinationRetryUsed,
-            lastGeneratedImageUrl
+            lastGeneratedImageUrl,
+            pendingOAuthData,
+            linkedInCachedData
           );
 
           // Tracking: capturar URL de imagen para reutilizar en retry de alucinación
           if (toolBlock.name === 'generate_image') {
             try {
-              const parsed = JSON.parse(result);
+              const parsed = JSON.parse(toolResult.result);
               if (parsed.success && parsed.images?.length > 0) {
                 lastGeneratedImageUrl = parsed.images[0];
               }
             } catch { /* ignore parse errors */ }
           }
 
-          // Tracking: contar publish_post EXITOSOS (no intentos fallidos)
-          if (publishPostCalled) {
+          // Tracking: contar publish_post EXITOSOS
+          if (toolResult.publishPostCalled) {
             publishPostCount++;
+          }
+
+          // Tracking: OAuth cookie clearing
+          if (toolResult.shouldClearOAuthCookie) {
+            shouldClearOAuthCookie = true;
+          }
+
+          // Tracking: LinkedIn cached data
+          if (toolResult.linkedInDataToCache) {
+            linkedInCachedData = toolResult.linkedInDataToCache;
           }
 
           console.log(
             `[Pioneer] Resultado de ${toolBlock.name}:`,
-            result.substring(0, 200)
+            toolResult.result.substring(0, 200)
           );
 
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolBlock.id,
-            content: result,
+            content: toolResult.result,
           });
         }
 
@@ -1056,12 +1727,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Excedimos el máximo de iteraciones
-    return NextResponse.json({
+    const jsonResponse = NextResponse.json({
       message:
         finalTextParts.join('\n\n') +
         '\n\n⚠️ Se alcanzó el límite de acciones por mensaje. Si necesita más, envíe otro mensaje.',
       usage: { input_tokens: 0, output_tokens: 0 },
     });
+
+    if (shouldClearOAuthCookie) {
+      jsonResponse.cookies.set(COOKIE_NAME, '', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 0,
+      });
+    }
+
+    return jsonResponse;
   } catch (error) {
     console.error('Error en API de chat:', error);
 

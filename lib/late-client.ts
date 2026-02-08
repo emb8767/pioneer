@@ -86,14 +86,34 @@ export async function listAccounts(): Promise<{ accounts: LateAccount[] }> {
   return lateRequest('/accounts');
 }
 
+// === OAUTH — CONNECT ===
+
+// Plataformas que requieren selección adicional → headless automático
+const HEADLESS_PLATFORMS = new Set([
+  'facebook',
+  'instagram',
+  'linkedin',
+  'pinterest',
+  'googlebusiness',
+  'snapchat',
+]);
+
+/**
+ * Determina si una plataforma usa OAuth headless.
+ */
+export function isHeadlessPlatform(platform: string): boolean {
+  return HEADLESS_PLATFORMS.has(platform);
+}
+
 /**
  * Genera la URL de OAuth para conectar una cuenta de red social.
  * 
- * Standard mode (sin headless): Late.dev maneja la selección de página/org
- * y redirige al callback con ?connected={platform}&profileId=X&username=Y
+ * Automáticamente usa headless=true para plataformas que requieren
+ * selección adicional (Facebook, Instagram, LinkedIn, Pinterest,
+ * Google Business, Snapchat).
  * 
- * Headless mode: Late.dev redirige al callback con tokens temporales
- * para que Pioneer construya su propia UI de selección.
+ * Standard mode: Late.dev redirige al callback con ?connected=platform
+ * Headless mode: Late.dev redirige al callback con tokens temporales + step=select_*
  */
 export async function getConnectUrl(
   platform: Platform,
@@ -102,9 +122,12 @@ export async function getConnectUrl(
 ): Promise<{ authUrl: string }> {
   const callbackUrl = `${getAppUrl()}/api/social/callback`;
   
+  // Auto-detect headless para plataformas que lo requieren
+  const useHeadless = options?.headless ?? HEADLESS_PLATFORMS.has(platform);
+  
   let endpoint = `/connect/${platform}?profileId=${profileId}&redirect_url=${encodeURIComponent(callbackUrl)}`;
   
-  if (options?.headless) {
+  if (useHeadless) {
     endpoint += '&headless=true';
   }
   
@@ -120,6 +143,224 @@ export async function connectBluesky(
   return lateRequest('/connect/bluesky/credentials', {
     method: 'POST',
     body: JSON.stringify({ profileId, handle, appPassword }),
+  });
+}
+
+// ============================================================
+// === HEADLESS OAUTH — Obtener opciones y guardar selección ===
+// ============================================================
+
+// --- Facebook: Obtener páginas disponibles ---
+
+export interface FacebookPage {
+  id: string;
+  name: string;
+  username?: string;
+  access_token: string;
+  category?: string;
+  tasks?: string[];
+}
+
+export async function getFacebookPages(
+  profileId: string,
+  tempToken: string,
+  connectToken: string
+): Promise<{ pages: FacebookPage[] }> {
+  return lateRequest(
+    `/connect/facebook/select-page?profileId=${profileId}&tempToken=${encodeURIComponent(tempToken)}`,
+    {
+      headers: {
+        'X-Connect-Token': connectToken,
+      },
+    }
+  );
+}
+
+export async function saveFacebookPage(
+  profileId: string,
+  pageId: string,
+  tempToken: string,
+  userProfile: Record<string, unknown>,
+  connectToken: string
+): Promise<unknown> {
+  return lateRequest('/connect/facebook/select-page', {
+    method: 'POST',
+    headers: {
+      'X-Connect-Token': connectToken,
+    },
+    body: JSON.stringify({
+      profileId,
+      pageId,
+      tempToken,
+      userProfile,
+    }),
+  });
+}
+
+// --- LinkedIn: Obtener datos pendientes ---
+// ⚠️ IMPORTANTE: Este endpoint es de UN SOLO USO — los datos se borran después de consultarlos.
+// Expiran en 10 minutos.
+
+export interface LinkedInPendingData {
+  platform: string;
+  profileId: string;
+  tempToken: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  userProfile: {
+    id: string;
+    username: string;
+    displayName: string;
+    profilePicture?: string;
+  };
+  selectionType?: string;
+  organizations?: Array<{
+    id: string;
+    urn: string;
+    name: string;
+  }>;
+}
+
+export async function getLinkedInPendingData(
+  pendingDataToken: string
+): Promise<LinkedInPendingData> {
+  return lateRequest(`/connect/pending-data?token=${encodeURIComponent(pendingDataToken)}`);
+}
+
+export async function saveLinkedInOrganization(
+  profileId: string,
+  tempToken: string,
+  userProfile: Record<string, unknown>,
+  accountType: 'personal' | 'organization',
+  connectToken: string,
+  selectedOrganization?: { id: string; urn: string; name: string }
+): Promise<unknown> {
+  return lateRequest('/connect/linkedin/select-organization', {
+    method: 'POST',
+    headers: {
+      'X-Connect-Token': connectToken,
+    },
+    body: JSON.stringify({
+      profileId,
+      tempToken,
+      userProfile,
+      accountType,
+      ...(selectedOrganization && { selectedOrganization }),
+    }),
+  });
+}
+
+// --- Pinterest: Obtener boards ---
+
+export interface PinterestBoard {
+  id: string;
+  name: string;
+  description?: string;
+  url?: string;
+}
+
+export async function getPinterestBoards(
+  profileId: string,
+  tempToken: string,
+  connectToken: string
+): Promise<{ boards: PinterestBoard[] }> {
+  return lateRequest(
+    `/connect/pinterest/select-board?profileId=${profileId}&tempToken=${encodeURIComponent(tempToken)}`,
+    {
+      headers: {
+        'X-Connect-Token': connectToken,
+      },
+    }
+  );
+}
+
+export async function savePinterestBoard(
+  profileId: string,
+  boardId: string,
+  boardName: string,
+  tempToken: string,
+  userProfile: Record<string, unknown>,
+  connectToken: string
+): Promise<unknown> {
+  return lateRequest('/connect/pinterest/select-board', {
+    method: 'POST',
+    headers: {
+      'X-Connect-Token': connectToken,
+    },
+    body: JSON.stringify({
+      profileId,
+      boardId,
+      boardName,
+      tempToken,
+      userProfile,
+    }),
+  });
+}
+
+// --- Google Business: Obtener ubicaciones ---
+
+export interface GoogleBusinessLocation {
+  id: string;
+  name: string;
+  address?: string;
+}
+
+export async function getGoogleBusinessLocations(
+  profileId: string,
+  tempToken: string,
+  connectToken: string
+): Promise<{ locations: GoogleBusinessLocation[] }> {
+  return lateRequest(
+    `/connect/googlebusiness/locations?profileId=${profileId}&tempToken=${encodeURIComponent(tempToken)}`,
+    {
+      headers: {
+        'X-Connect-Token': connectToken,
+      },
+    }
+  );
+}
+
+export async function saveGoogleBusinessLocation(
+  profileId: string,
+  locationId: string,
+  tempToken: string,
+  userProfile: Record<string, unknown>,
+  connectToken: string
+): Promise<unknown> {
+  return lateRequest('/connect/googlebusiness/select-location', {
+    method: 'POST',
+    headers: {
+      'X-Connect-Token': connectToken,
+    },
+    body: JSON.stringify({
+      profileId,
+      locationId,
+      tempToken,
+      userProfile,
+    }),
+  });
+}
+
+// --- Snapchat: Guardar selección de perfil público ---
+
+export async function saveSnapchatProfile(
+  profileId: string,
+  publicProfileId: string,
+  tempToken: string,
+  userProfile: Record<string, unknown>,
+  connectToken: string
+): Promise<unknown> {
+  return lateRequest('/connect/snapchat/select-profile', {
+    method: 'POST',
+    headers: {
+      'X-Connect-Token': connectToken,
+    },
+    body: JSON.stringify({
+      profileId,
+      publicProfileId,
+      tempToken,
+      userProfile,
+    }),
   });
 }
 

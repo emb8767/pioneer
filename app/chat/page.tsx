@@ -11,6 +11,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingConnectionHandled, setPendingConnectionHandled] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll al último mensaje
@@ -30,6 +31,73 @@ export default function ChatPage() {
       ]);
     }
   }, []);
+
+  // === DETECTAR ?pending_connection EN LA URL ===
+  // Cuando el usuario regresa del OAuth headless, la URL tiene ?pending_connection=facebook
+  // Enviamos un mensaje automático para que Pioneer llame get_pending_connection
+  useEffect(() => {
+    if (pendingConnectionHandled) return;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const pendingPlatform = urlParams.get('pending_connection');
+
+    if (pendingPlatform) {
+      setPendingConnectionHandled(true);
+
+      // Limpiar el query param de la URL sin recargar la página
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, '', newUrl);
+
+      // Enviar mensaje automático después de que el componente se monte
+      const platformName = getPlatformDisplayName(pendingPlatform);
+      const autoMessage = `Acabo de autorizar ${platformName}. Necesito completar la conexión.`;
+
+      // Pequeño delay para que el chat esté listo
+      setTimeout(() => {
+        sendAutoMessage(autoMessage);
+      }, 500);
+    }
+  }, [pendingConnectionHandled]);
+
+  // Función para enviar mensaje automático (sin input del usuario)
+  const sendAutoMessage = async (messageText: string) => {
+    if (isLoading) return;
+
+    const userMessage: Message = { role: 'user', content: messageText };
+    const newMessages = [...messages, userMessage];
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+
+    try {
+      // Filtrar el mensaje de bienvenida para no enviarlo a la API
+      const messagesToSend = newMessages.slice(1);
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: messagesToSend }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Error en la respuesta del servidor');
+      }
+
+      const data = await response.json();
+      setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
+    } catch (error) {
+      console.error('Error:', error);
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content:
+            'Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.',
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -143,4 +211,24 @@ export default function ChatPage() {
       </div>
     </div>
   );
+}
+
+// Helper para nombres bonitos de plataformas
+function getPlatformDisplayName(platform: string): string {
+  const names: Record<string, string> = {
+    facebook: 'Facebook',
+    instagram: 'Instagram',
+    twitter: 'Twitter/X',
+    linkedin: 'LinkedIn',
+    tiktok: 'TikTok',
+    youtube: 'YouTube',
+    threads: 'Threads',
+    reddit: 'Reddit',
+    pinterest: 'Pinterest',
+    bluesky: 'Bluesky',
+    googlebusiness: 'Google Business',
+    telegram: 'Telegram',
+    snapchat: 'Snapchat',
+  };
+  return names[platform] || platform;
 }
