@@ -54,7 +54,7 @@ function detectPublishHallucination(text: string, publishPostCount: number): boo
   return PUBLISH_HALLUCINATION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-// === SYSTEM PROMPT OPTIMIZADO v3 ===
+// === SYSTEM PROMPT OPTIMIZADO v4 ===
 function buildSystemPrompt(): string {
   const fechaActual = getCurrentDateForPrompt();
 
@@ -160,6 +160,7 @@ Sobre imágenes:
 - Aspect ratio: Instagram 4:5, Facebook 1:1, Twitter 16:9, TikTok 9:16. Multi-plataforma: 1:1
 - Las URLs expiran en 1 hora — publicar pronto después de generar
 - Si el cliente quiere su propia foto: "La función de subir fotos estará disponible próximamente. Puedo generar una imagen AI o publicar solo con texto."
+- Si el resultado de generate_image incluye _note_for_pioneer con "regenerated", informa al cliente que la primera imagen no fue accesible y se regeneró, con el costo total actualizado. Ejemplo: "La primera imagen generada no fue accesible, así que generé una nueva. El costo total de imagen fue de $0.030 en vez de $0.015."
 
 === TIPOS DE CONTENIDO ===
 
@@ -644,7 +645,9 @@ async function executeTool(
   toolName: string,
   toolInput: Record<string, unknown>,
   generateImageWasCalled: boolean,
-  publishPostCount: number
+  publishPostCount: number,
+  hallucinationRetryUsed: boolean,
+  lastGeneratedImageUrl: string | null
 ): Promise<{ result: string; publishPostCalled: boolean }> {
   try {
     switch (toolName) {
@@ -705,6 +708,28 @@ async function executeTool(
       }
 
       case 'generate_image': {
+        // === FIX BUG 8.1: Bloquear regeneración en retry de alucinación ===
+        // Si estamos en retry de alucinación y ya tenemos una imagen generada,
+        // retornar la URL guardada sin llamar a Replicate de nuevo.
+        // Esto evita el "image swap" donde Claude genera una imagen diferente.
+        if (hallucinationRetryUsed && lastGeneratedImageUrl) {
+          console.log(`[Pioneer] Reutilizando imagen existente en retry de alucinación: ${lastGeneratedImageUrl.substring(0, 80)}...`);
+          return {
+            result: JSON.stringify({
+              success: true,
+              images: [lastGeneratedImageUrl],
+              model: 'cached',
+              cost_real: 0,
+              cost_client: 0,
+              expires_in: '1 hora',
+              regenerated: false,
+              attempts: 0,
+              _note: 'Imagen reutilizada del intento anterior (no se generó una nueva)',
+            }),
+            publishPostCalled: false,
+          };
+        }
+
         const input = toolInput as {
           prompt: string;
           model?: string;
@@ -717,8 +742,15 @@ async function executeTool(
           aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
           num_outputs: input.num_outputs || 1,
         });
+
+        // === NOTA PARA PIONEER: informar al cliente si hubo regeneración ===
+        const resultObj: Record<string, unknown> = { ...result };
+        if (result.regenerated && result.success) {
+          resultObj._note_for_pioneer = `IMPORTANTE: La primera imagen generada no fue accesible y se regeneró automáticamente. El costo total de imagen fue $${result.cost_client.toFixed(3)} (${result.attempts} intentos). Informa al cliente de este costo actualizado.`;
+        }
+
         return {
-          result: JSON.stringify(result),
+          result: JSON.stringify(resultObj),
           publishPostCalled: false,
         };
       }
@@ -732,7 +764,7 @@ async function executeTool(
               success: false,
               error: 'Solo puedes publicar 1 post por mensaje. Para publicar el siguiente post, espera a que el cliente envíe un nuevo mensaje confirmando que desea continuar.',
             }),
-            publishPostCalled: false,  // NO contar como exitoso — es un rechazo por límite
+            publishPostCalled: false,
           };
         }
 
@@ -755,7 +787,7 @@ async function executeTool(
               error: validation.error,
               corrections: validation.corrections,
             }),
-            publishPostCalled: false,  // NO contar como exitoso — falló validación
+            publishPostCalled: false,
           };
         }
 
@@ -805,7 +837,7 @@ async function executeTool(
               error: errorMessage,
               corrections: validation.corrections,
             }),
-            publishPostCalled: false,  // NO contar como exitoso — Late.dev falló
+            publishPostCalled: false,
           };
         }
       }
@@ -822,7 +854,7 @@ async function executeTool(
       result: JSON.stringify({
         error: `Error al ejecutar ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
       }),
-      publishPostCalled: false,  // Errores nunca cuentan como exitosos
+      publishPostCalled: false,
     };
   }
 }
@@ -855,7 +887,7 @@ export async function POST(request: NextRequest) {
 
     // === TRACKING ===
     let generateImageWasCalled = false;
-    let lastGeneratedImageUrl: string | null = null;  // Para pasar al retry de alucinación
+    let lastGeneratedImageUrl: string | null = null;
     let publishPostCount = 0;
     let hallucinationRetryUsed = false;
 
@@ -890,7 +922,7 @@ export async function POST(request: NextRequest) {
 
           // Construir mensaje correctivo con la URL de imagen si existe
           let correctiveMessage = 'ERROR DEL SISTEMA: No se ejecutó la publicación. Debes llamar la tool publish_post para publicar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.';
-          
+
           if (lastGeneratedImageUrl) {
             correctiveMessage += ` IMPORTANTE: NO generes una nueva imagen. Usa esta URL que ya generaste: ${lastGeneratedImageUrl}`;
           }
@@ -951,7 +983,9 @@ export async function POST(request: NextRequest) {
             toolBlock.name,
             toolBlock.input as Record<string, unknown>,
             generateImageWasCalled,
-            publishPostCount
+            publishPostCount,
+            hallucinationRetryUsed,
+            lastGeneratedImageUrl
           );
 
           // Tracking: capturar URL de imagen para reutilizar en retry de alucinación
