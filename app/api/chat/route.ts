@@ -646,8 +646,6 @@ async function executeTool(
   generateImageWasCalled: boolean,
   publishPostCount: number
 ): Promise<{ result: string; publishPostCalled: boolean }> {
-  let wasPublishPost = false;
-
   try {
     switch (toolName) {
       case 'list_connected_accounts': {
@@ -726,7 +724,6 @@ async function executeTool(
       }
 
       case 'publish_post': {
-        wasPublishPost = true;
 
         // === LÍMITE: MÁXIMO 1 publish_post POR REQUEST ===
         if (publishPostCount >= 1) {
@@ -735,7 +732,7 @@ async function executeTool(
               success: false,
               error: 'Solo puedes publicar 1 post por mensaje. Para publicar el siguiente post, espera a que el cliente envíe un nuevo mensaje confirmando que desea continuar.',
             }),
-            publishPostCalled: true,
+            publishPostCalled: false,  // NO contar como exitoso — es un rechazo por límite
           };
         }
 
@@ -758,7 +755,7 @@ async function executeTool(
               error: validation.error,
               corrections: validation.corrections,
             }),
-            publishPostCalled: true,
+            publishPostCalled: false,  // NO contar como exitoso — falló validación
           };
         }
 
@@ -808,7 +805,7 @@ async function executeTool(
               error: errorMessage,
               corrections: validation.corrections,
             }),
-            publishPostCalled: true,
+            publishPostCalled: false,  // NO contar como exitoso — Late.dev falló
           };
         }
       }
@@ -825,7 +822,7 @@ async function executeTool(
       result: JSON.stringify({
         error: `Error al ejecutar ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
       }),
-      publishPostCalled: wasPublishPost,
+      publishPostCalled: false,  // Errores nunca cuentan como exitosos
     };
   }
 }
@@ -858,6 +855,7 @@ export async function POST(request: NextRequest) {
 
     // === TRACKING ===
     let generateImageWasCalled = false;
+    let lastGeneratedImageUrl: string | null = null;  // Para pasar al retry de alucinación
     let publishPostCount = 0;
     let hallucinationRetryUsed = false;
 
@@ -890,13 +888,20 @@ export async function POST(request: NextRequest) {
           console.warn('[Pioneer] ⚠️ ALUCINACIÓN DETECTADA: Claude dijo "publicado" sin llamar publish_post. Forzando retry.');
           hallucinationRetryUsed = true;
 
+          // Construir mensaje correctivo con la URL de imagen si existe
+          let correctiveMessage = 'ERROR DEL SISTEMA: No se ejecutó la publicación. Debes llamar la tool publish_post para publicar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.';
+          
+          if (lastGeneratedImageUrl) {
+            correctiveMessage += ` IMPORTANTE: NO generes una nueva imagen. Usa esta URL que ya generaste: ${lastGeneratedImageUrl}`;
+          }
+
           // Agregar la respuesta de Claude y un mensaje correctivo del sistema
           currentMessages = [
             ...currentMessages,
             { role: 'assistant' as const, content: response.content },
             {
               role: 'user' as const,
-              content: 'ERROR DEL SISTEMA: No se ejecutó la publicación. Debes llamar la tool publish_post para publicar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.',
+              content: correctiveMessage,
             },
           ];
 
@@ -940,6 +945,13 @@ export async function POST(request: NextRequest) {
           // Tracking: marcar si generate_image fue llamada
           if (toolBlock.name === 'generate_image') {
             generateImageWasCalled = true;
+            // Capturar la URL de la imagen para reutilizar en retry de alucinación
+            try {
+              const parsed = JSON.parse(result);
+              if (parsed.success && parsed.images?.length > 0) {
+                lastGeneratedImageUrl = parsed.images[0];
+              }
+            } catch { /* ignore parse errors */ }
           }
 
           const { result, publishPostCalled } = await executeTool(
@@ -949,7 +961,7 @@ export async function POST(request: NextRequest) {
             publishPostCount
           );
 
-          // Tracking: contar publish_post exitosos
+          // Tracking: contar publish_post EXITOSOS (no intentos fallidos)
           if (publishPostCalled) {
             publishPostCount++;
           }
