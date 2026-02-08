@@ -34,14 +34,16 @@ const PLATFORM_HASHTAG_COUNT: Partial<Record<Platform, number>> = {
   bluesky: 3,
 };
 
-// === REGLAS DE BREVEDAD (inyectadas en cada prompt de generación) ===
+// === REGLAS DE CALIDAD DE CONTENIDO (inyectadas en cada prompt) ===
 const BREVITY_RULES = `
-REGLAS DE BREVEDAD — OBLIGATORIO:
-- Máximo 3-5 líneas de texto real + CTA + hashtags.
-- NUNCA listes más de 2-3 items. Si hay más, destaca 1-2 y di "y más".
-- Fórmula: Hook (1 línea) + Beneficio (1-2 líneas) + CTA (1 línea) + hashtags.
-- Un buen post se lee en 3 SEGUNDOS.
-- NO escribas párrafos largos. NO listes menús completos ni catálogos.`;
+REGLAS DE CALIDAD — OBLIGATORIO:
+- Máximo 4-6 líneas de texto real + CTA + hashtags.
+- NUNCA listes más de 2-3 items. Si hay más, destaca 2-3 y di "y más".
+- Fórmula: Hook (1 línea) + Beneficio/Info (2-3 líneas) + CTA con contacto (1-2 líneas) + hashtags.
+- Incluye datos de contacto REALES si están en los detalles (teléfono, dirección).
+- NUNCA inventes testimonios, marcas, precios, o datos no proporcionados.
+- NUNCA uses placeholders como [dirección] o [teléfono].
+- NO escribas párrafos largos, pero incluye toda info relevante para que el lector actúe.`;
 
 // Prompt base según tipo de post
 function getPromptForType(req: ContentRequest, platform: Platform): string {
@@ -168,8 +170,10 @@ export async function generateContent(
     const systemPrompt = `Eres un copywriter experto en marketing digital para pequeños negocios en Puerto Rico.
 Genera contenido en español. No uses modismos de otros países latinoamericanos.
 El contenido debe ser claro, directo y persuasivo.
-Usa emojis con moderación (1-3 máximo).
-IMPORTANTE: Los posts deben ser CORTOS y PUNCHY — máximo 3-5 líneas de texto real antes de hashtags. NUNCA escribas párrafos largos ni listes más de 2-3 items. Las imágenes cuentan la historia visual, el texto solo complementa.
+Usa emojis con moderación (2-4 máximo).
+IMPORTANTE: Los posts deben ser CONCISOS pero INFORMATIVOS — máximo 4-6 líneas de texto real antes de hashtags. Incluye toda la info necesaria para que alguien actúe (contacto, ubicación si aplica).
+NUNCA inventes datos: no inventes testimonios, marcas, precios, direcciones ni teléfonos. Usa SOLO la información proporcionada en los detalles. Si los detalles incluyen dirección y teléfono, inclúyelos en el CTA.
+NUNCA uses placeholders como [dirección] o [teléfono] — si no tienes el dato, omítelo.
 ${includeHashtags && hashtagCount > 0 ? `Incluye ${hashtagCount} hashtags relevantes al final del texto. Incluye al menos 1 hashtag local (#PR, #PuertoRico, o del municipio) y 1 de la industria.` : 'NO incluyas hashtags.'}
 Responde SOLO con el texto del post, nada más. Sin explicaciones, sin comillas, sin prefijos.`;
 
