@@ -908,23 +908,11 @@ async function executeTool(
 
         const imageCount = Math.min(Math.max(input.count || 1, 1), 10);
 
-        // Para carruseles (count > 1): generar en paralelo con llamadas individuales
-        // FLUX schnell num_outputs solo genera variaciones del mismo prompt en 1 llamada
-        // Para carruseles queremos imágenes diferentes, así que hacemos N llamadas de 1
+        // Para carruseles (count > 1): generar SECUENCIALMENTE para evitar rate limiting de Replicate
+        // Promise.all causa que Replicate rechace llamadas simultáneas con ApiError
         if (imageCount > 1) {
-          console.log(`[Pioneer] Generando carrusel: ${imageCount} imágenes en paralelo`);
-          const promises = Array.from({ length: imageCount }, () =>
-            generateImage({
-              prompt: input.prompt,
-              model: (input.model as 'schnell' | 'pro') || 'schnell',
-              aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
-              num_outputs: 1,
-            })
-          );
+          console.log(`[Pioneer] Generando carrusel: ${imageCount} imágenes secuencialmente`);
 
-          const results = await Promise.all(promises);
-
-          // Combinar resultados
           const allImages: string[] = [];
           let totalCostReal = 0;
           let totalCostClient = 0;
@@ -932,22 +920,40 @@ async function executeTool(
           let maxAttempts = 0;
           const errors: string[] = [];
 
-          for (const r of results) {
+          for (let i = 0; i < imageCount; i++) {
+            console.log(`[Pioneer] Generando imagen ${i + 1}/${imageCount}...`);
+
+            const r = await generateImage({
+              prompt: input.prompt,
+              model: (input.model as 'schnell' | 'pro') || 'schnell',
+              aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
+              num_outputs: 1,
+            });
+
             totalCostReal += r.cost_real;
             totalCostClient += r.cost_client;
             if (r.regenerated) anyRegenerated = true;
             if (r.attempts > maxAttempts) maxAttempts = r.attempts;
+
             if (r.success && r.images.length > 0) {
               allImages.push(...r.images);
             } else if (r.error) {
               errors.push(r.error);
+              console.warn(`[Pioneer] Imagen ${i + 1}/${imageCount} falló: ${r.error}`);
+            }
+
+            // Pausa entre generaciones para evitar rate limiting (excepto la última)
+            if (i < imageCount - 1) {
+              await new Promise((resolve) => setTimeout(resolve, 500));
             }
           }
+
+          console.log(`[Pioneer] Carrusel completado: ${allImages.length}/${imageCount} imágenes generadas. Costo: $${totalCostClient.toFixed(3)}`);
 
           const resultObj: Record<string, unknown> = {
             success: allImages.length > 0,
             images: allImages,
-            model: results[0]?.model || 'unknown',
+            model: `flux-schnell (${imageCount} sequential)`,
             cost_real: totalCostReal,
             cost_client: totalCostClient,
             expires_in: '1 hora (publicar pronto o descargar)',
