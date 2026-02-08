@@ -942,9 +942,11 @@ async function executeTool(
               console.warn(`[Pioneer] Imagen ${i + 1}/${imageCount} falló: ${r.error}`);
             }
 
-            // Pausa entre generaciones para evitar rate limiting (excepto la última)
+            // Pausa entre generaciones para respetar rate limit de Replicate
+            // Free plan: burst of 1, rate resets in ~10s cuando tienes <$5 crédito
             if (i < imageCount - 1) {
-              await new Promise((resolve) => setTimeout(resolve, 500));
+              console.log(`[Pioneer] Esperando 10s antes de generar imagen ${i + 2}/${imageCount} (rate limit Replicate)...`);
+              await new Promise((resolve) => setTimeout(resolve, 10000));
             }
           }
 
