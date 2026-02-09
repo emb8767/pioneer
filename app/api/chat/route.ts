@@ -120,7 +120,21 @@ export async function POST(request: NextRequest) {
 
       // === SI CLAUDE TERMINÓ ===
       if (response.stop_reason === 'end_turn') {
-        const fullText = finalTextParts.join('\n\n');
+        let fullText = finalTextParts.join('\n\n');
+
+        // === INYECCIÓN AUTOMÁTICA DE URL DE IMAGEN ===
+        // Si generate_image fue llamada en este request y la URL NO aparece en el texto,
+        // inyectarla automáticamente. Esto elimina la dependencia de que Claude pegue la URL.
+        if (generateImageWasCalled && lastGeneratedImageUrls.length > 0) {
+          const hasImageUrl = lastGeneratedImageUrls.some(url => fullText.includes(url));
+          if (!hasImageUrl) {
+            console.log(`[Pioneer] Inyectando ${lastGeneratedImageUrls.length} URL(s) de imagen en respuesta (Claude no las incluyó)`);
+            const urlBlock = lastGeneratedImageUrls.join('\n\n');
+            fullText = fullText + '\n\n' + urlBlock;
+            // Reemplazar finalTextParts para que los checks posteriores usen el texto actualizado
+            finalTextParts = [fullText];
+          }
+        }
 
         // Detección de alucinación de publicación/programación
         if (detectPublishHallucination(fullText, publishPostCount) && !hallucinationRetryUsed) {
@@ -224,7 +238,17 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          if (toolResult.publishPostCalled) publishPostCount += 1;
+          if (toolResult.publishPostCalled) {
+            publishPostCount += 1;
+            // === RESET para siguiente post: limpiar tracking de imagen ===
+            // Cada post es un ciclo independiente. Después de publicar exitosamente,
+            // resetear para que el siguiente post no reutilice datos del anterior.
+            generateImageWasCalled = false;
+            lastGeneratedImageUrls = [];
+            hallucinationRetryUsed = false;
+            imageHallucinationRetryUsed = false;
+            console.log('[Pioneer] Post publicado — tracking de imagen reseteado para siguiente post');
+          }
           if (toolResult.shouldClearOAuthCookie) shouldClearOAuthCookie = true;
           if (toolResult.linkedInDataToCache) linkedInCachedData = toolResult.linkedInDataToCache;
           if (toolResult.connectionOptionsToCache) cachedConnectionOptions = toolResult.connectionOptionsToCache;
