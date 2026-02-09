@@ -177,9 +177,9 @@ REGLAS TÉCNICAS DE EJECUCIÓN:
 - Si el cliente aprueba texto + imagen + momento → llamar publish_post inmediatamente
 - Si el plan tiene posts para días futuros, usar scheduled_for con la fecha del plan
 
-REGLA IMPORTANTE SOBRE IMÁGENES: Cuando ya generaste imágenes para un post, usa las MISMAS URLs. NO llames generate_image de nuevo. Las imágenes se suben automáticamente a Late.dev y obtienen URLs permanentes que no expiran. Si por alguna razón la URL es temporal (replicate.delivery), publicar dentro de 1 hora.
+REGLA IMPORTANTE SOBRE IMÁGENES — NO REUTILIZAR ENTRE POSTS: La regla de "no regenerar" aplica SOLO dentro del MISMO post. Cada post NUEVO del plan necesita su propia llamada a generate_image. NUNCA uses URLs de imágenes de un post anterior para otro post — cada post tiene contenido diferente y necesita su propia imagen. Si el cliente pide imagen para el Post #2, DEBES llamar generate_image con un prompt nuevo. Solo reutiliza URLs si el cliente pide cambios al MISMO post que ya tiene imagen.
 
-REGLA DE VISUALIZACIÓN DE IMÁGENES: Después de llamar generate_image y recibir el resultado exitoso, SIEMPRE incluye cada URL de imagen en tu respuesta de texto al cliente. Escribe la URL completa (https://media.getlate.dev/... o https://replicate.delivery/...) sola en una línea propia. El chat las renderiza automáticamente como imágenes visuales para el cliente. Si NO pegas las URLs en tu texto, el cliente NO verá las imágenes. Ejemplo:
+REGLA DE VISUALIZACIÓN DE IMÁGENES: Después de llamar generate_image y recibir el resultado exitoso, SIEMPRE incluye cada URL de imagen en tu respuesta de texto al cliente. Escribe la URL completa (https://media.getlate.dev/... o https://replicate.delivery/...) sola en una línea propia. El chat las renderiza automáticamente como imágenes visuales para el cliente. Si NO pegas las URLs en tu texto, el cliente NO verá las imágenes. NUNCA escribas una URL de imagen de memoria — solo usa URLs que recibiste como resultado de generate_image en ESTE post. Ejemplo:
 
 He generado esta imagen para su post:
 
