@@ -42,6 +42,18 @@ function detectPublishHallucination(text: string, publishPostCount: number): boo
   return PUBLISH_HALLUCINATION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+// === DETECCIÓN DE ALUCINACIÓN DE IMAGEN ===
+// Detecta cuando Claude incluye URLs de imagen en su texto sin haber llamado generate_image
+const IMAGE_URL_PATTERNS = [
+  /https:\/\/media\.getlate\.dev\/[^\s)]+/,
+  /https:\/\/replicate\.delivery\/[^\s)]+/,
+];
+
+function detectImageHallucination(text: string, generateImageWasCalled: boolean): boolean {
+  if (generateImageWasCalled) return false;
+  return IMAGE_URL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 const MAX_TOOL_USE_ITERATIONS = 10;
 
 export async function POST(request: NextRequest) {
@@ -81,6 +93,7 @@ export async function POST(request: NextRequest) {
     let lastGeneratedImageUrls: string[] = [];
     let publishPostCount = 0;
     let hallucinationRetryUsed = false;
+    let imageHallucinationRetryUsed = false;
     let shouldClearOAuthCookie = false;
     let linkedInCachedData: Record<string, unknown> | null = null;
     let cachedConnectionOptions: Array<{ id: string; name: string }> | null = null;
@@ -119,6 +132,22 @@ export async function POST(request: NextRequest) {
           if (lastGeneratedImageUrls.length > 0) {
             correctiveMessage += ` IMPORTANTE: NO generes nuevas imágenes. Usa estas URLs que ya generaste: ${JSON.stringify(lastGeneratedImageUrls)}`;
           }
+
+          currentMessages = [
+            ...currentMessages,
+            { role: 'assistant' as const, content: response.content },
+            { role: 'user' as const, content: correctiveMessage },
+          ];
+          finalTextParts = [];
+          continue;
+        }
+
+        // Detección de alucinación de imagen — Claude muestra URL sin llamar generate_image
+        if (detectImageHallucination(fullText, generateImageWasCalled) && !imageHallucinationRetryUsed) {
+          console.warn('[Pioneer] ⚠️ ALUCINACIÓN DE IMAGEN DETECTADA: Claude incluyó URL de imagen sin llamar generate_image. Forzando retry.');
+          imageHallucinationRetryUsed = true;
+
+          const correctiveMessage = 'ERROR DEL SISTEMA: Incluiste una URL de imagen en tu respuesta sin haber llamado la tool generate_image. Cada imagen NUEVA requiere llamar generate_image — NUNCA reutilices URLs de posts anteriores ni de tu memoria. El cliente pidió una imagen. Llama generate_image ahora con un prompt apropiado para este post. NO respondas con texto — usa la tool generate_image.';
 
           currentMessages = [
             ...currentMessages,
