@@ -5,6 +5,8 @@
 // 2. ANTES de cada tool: consultar draft-guardian (validateToolCall)
 // 3. DESPUÉS de cada tool: actualizar estado del guardian (updateStateAfterTool)
 // 4. Cuando Claude quiere terminar (end_turn): consultar guardian (validateEndTurn)
+//    - Protección ①: draft sin publish → forzar continuación
+//    - Protección ④: aprobación sin tools → forzar acción (máximo 1 retry)
 // 5. Recoger texto acumulado + estado final
 //
 // ESTILO PLC/LADDER: el loop es el scan cycle, el guardian es el interlock
@@ -37,6 +39,19 @@ export interface ConversationResult {
   lastUsage: Anthropic.Usage | null;
 }
 
+/**
+ * Extrae el texto del último mensaje del usuario del array de mensajes.
+ * Se usa para la Protección ④ (detectar aprobaciones).
+ */
+function getLastUserMessage(messages: Anthropic.MessageParam[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user' && typeof messages[i].content === 'string') {
+      return messages[i].content as string;
+    }
+  }
+  return '';
+}
+
 // === LOOP PRINCIPAL ===
 export async function runConversationLoop(
   initialMessages: Anthropic.MessageParam[],
@@ -48,7 +63,14 @@ export async function runConversationLoop(
   const finalTextParts: string[] = [];
   let lastUsage: Anthropic.Usage | null = null;
 
+  // Protección ④: limitar a 1 retry para evitar loop infinito
+  // Si Claude ignora el forzamiento, dejarlo terminar (mejor que un loop costoso)
+  let approvalForceRetryUsed = false;
+
   const systemPrompt = buildSystemPrompt();
+
+  // Extraer el último mensaje del usuario REAL (no mensajes inyectados por guardian)
+  const lastUserMessage = getLastUserMessage(initialMessages);
 
   for (let iteration = 0; iteration < MAX_TOOL_USE_ITERATIONS; iteration++) {
     console.log(`[Pioneer] === Iteración ${iteration + 1}/${MAX_TOOL_USE_ITERATIONS} ===`);
@@ -75,12 +97,25 @@ export async function runConversationLoop(
     // CASO 1: Claude quiere terminar (end_turn)
     // ═══════════════════════════════════════════════
     if (response.stop_reason === 'end_turn') {
-      // PROTECCIÓN ①: ¿Hay draft sin publish?
-      const endVerdict = validateEndTurn(guardianState);
+      // PROTECCIÓN ① + ④: ¿Debe forzar continuación?
+      const endVerdict = validateEndTurn(guardianState, lastUserMessage);
 
       if (!endVerdict.allowed && endVerdict.forceMessage) {
+        // Protección ④ tiene límite de 1 retry para evitar loop infinito
+        const isProtection4 = !guardianState.draftCreated && !guardianState.anyToolExecutedInRequest;
+
+        if (isProtection4 && approvalForceRetryUsed) {
+          // Ya intentamos una vez — dejar que Claude termine
+          console.log(`[DraftGuardian] Protección ④ ya usó su retry — permitiendo end_turn`);
+          break;
+        }
+
+        if (isProtection4) {
+          approvalForceRetryUsed = true;
+        }
+
         // NO dejar que termine — inyectar mensaje sistema para forzar continuación
-        console.log(`[DraftGuardian] Forzando continuación — draft pendiente`);
+        console.log(`[DraftGuardian] Forzando continuación`);
         currentMessages = [
           ...currentMessages,
           { role: 'assistant' as const, content: response.content },
