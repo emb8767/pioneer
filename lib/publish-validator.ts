@@ -1,51 +1,65 @@
-// Validación preventiva y retry inteligente para publish_post
-// Extraído de app/api/chat/route.ts para modularidad
+// Validación preventiva y flujo Draft-First para Pioneer Agent
+//
+// === CAMBIOS Draft-First ===
+// - validateAndPrepareDraft(): valida contenido/cuentas para crear draft
+// - activateDraftWithRetry(): PUT /v1/posts/{draft_id} con retry inteligente
+// - Manejo nativo de Error 409 (duplicados detectados por Late.dev)
+// - Eliminado: publishWithRetry() basado en createPost()
 
 import {
   listAccounts,
-  createPost,
+  createDraftPost,
+  activateDraft,
   getNextOptimalTime,
   PR_TIMEZONE,
   LateApiError,
 } from '@/lib/late-client';
 import { PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
-import type { Platform, LatePlatformTarget } from '@/lib/types';
+import type { Platform, LatePlatformTarget, LatePost } from '@/lib/types';
 
 // === LIMPIAR MARKDOWN Y FORMATO PARA REDES SOCIALES ===
-// Facebook, Instagram, etc. no renderizan markdown — los ** se muestran como asteriscos
-// También limpia comillas decorativas que Claude añade alrededor de "testimonios"
 export function stripMarkdown(text: string): string {
   return text
-    .replace(/\*\*\*(.*?)\*\*\*/g, '$1')   // ***bold italic*** → text
-    .replace(/\*\*(.*?)\*\*/g, '$1')        // **bold** → text
-    .replace(/\*(.*?)\*/g, '$1')            // *italic* → text
-    .replace(/~~(.*?)~~/g, '$1')            // ~~strikethrough~~ → text
-    .replace(/`(.*?)`/g, '$1')              // `code` → text
-    .replace(/^#{1,6}\s+/gm, '')            // ### headers → text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [link](url) → link text
-    .replace(/^"|"$/gm, '')                 // Comillas decorativas al inicio/fin de línea
-    .replace(/[""]/g, '"')                  // Comillas tipográficas → rectas
-    .replace(/['']/g, "'")                  // Apóstrofes tipográficos → rectos
-    .replace(/\\"/g, '"');                  // Comillas escapadas \"...\" → "..."
+    .replace(/\*\*\*(.*?)\*\*\*/g, '$1')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/~~(.*?)~~/g, '$1')
+    .replace(/`(.*?)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^"|"$/gm, '')
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'")
+    .replace(/\\"/g, '"');
 }
 
 // === INTERFACES ===
 
-export interface ValidatedPublishData {
+export interface ValidatedDraftData {
   content: string;
   platforms: LatePlatformTarget[];
+  mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
+  timezone: string;
+}
+
+export interface ValidatedActivateData {
   publishNow?: boolean;
   scheduledFor?: string;
   timezone?: string;
-  mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
   queuedFromProfile?: string;
 }
 
 export interface ValidationResult {
   success: boolean;
-  data?: ValidatedPublishData;
+  data?: ValidatedDraftData;
   error?: string;
   corrections?: string[];
+}
+
+export interface ActivateValidationResult {
+  success: boolean;
+  data?: ValidatedActivateData;
+  error?: string;
 }
 
 // === HELPER: Validar que una URL de media es de origen confiable ===
@@ -56,18 +70,15 @@ function isValidMediaOrigin(url: string): boolean {
   );
 }
 
-// === VALIDACIÓN PREVENTIVA PARA PUBLISH_POST ===
+// ============================================================
+// === VALIDACIÓN PARA CREATE_DRAFT ===
+// ============================================================
 
-export async function validateAndPreparePublish(
+export async function validateAndPrepareDraft(
   input: {
     content: string;
     platforms: Array<{ platform: string; account_id: string }>;
-    publish_now?: boolean;
-    scheduled_for?: string;
-    timezone?: string;
     media_urls?: string[];
-    use_queue?: boolean;
-    queue_profile_id?: string;
   },
   generateImageWasCalled: boolean
 ): Promise<ValidationResult> {
@@ -119,10 +130,7 @@ export async function validateAndPreparePublish(
     );
 
     if (exactMatch) {
-      validatedPlatforms.push({
-        platform,
-        accountId: exactMatch._id,
-      });
+      validatedPlatforms.push({ platform, accountId: exactMatch._id });
       continue;
     }
 
@@ -134,10 +142,7 @@ export async function validateAndPreparePublish(
       corrections.push(
         `account_id para ${platform} corregido: ${requested.account_id} → ${platformMatch._id} (${platformMatch.username || 'sin username'})`
       );
-      validatedPlatforms.push({
-        platform,
-        accountId: platformMatch._id,
-      });
+      validatedPlatforms.push({ platform, accountId: platformMatch._id });
       continue;
     }
 
@@ -186,28 +191,15 @@ export async function validateAndPreparePublish(
     }
   }
 
-  // --- 6. Construir datos de publicación ---
-  const publishData: ValidatedPublishData = {
+  // --- 6. Construir datos del draft ---
+  const draftData: ValidatedDraftData = {
     content: finalContent,
     platforms: validatedPlatforms,
+    timezone: PR_TIMEZONE,
   };
 
-  // Modo queue: agregar a la cola de publicación
-  if (input.use_queue) {
-    publishData.queuedFromProfile = input.queue_profile_id || '6984c371b984889d86a8b3d6';
-    // NO agregar publishNow ni scheduledFor — Late.dev asigna el slot
-  } else if (input.publish_now) {
-    publishData.publishNow = true;
-  } else if (input.scheduled_for) {
-    publishData.scheduledFor = input.scheduled_for;
-    publishData.timezone = input.timezone || PR_TIMEZONE;
-  } else {
-    publishData.scheduledFor = getNextOptimalTime();
-    publishData.timezone = PR_TIMEZONE;
-  }
-
   if (validMediaUrls.length > 0) {
-    publishData.mediaItems = validMediaUrls.map((url) => ({
+    draftData.mediaItems = validMediaUrls.map((url) => ({
       type: (url.match(/\.(mp4|mov|avi|webm)$/i) ? 'video' : 'image') as 'image' | 'video',
       url,
     }));
@@ -215,14 +207,185 @@ export async function validateAndPreparePublish(
 
   return {
     success: true,
-    data: publishData,
+    data: draftData,
     corrections,
   };
 }
 
-// === RETRY INTELIGENTE ===
+// ============================================================
+// === VALIDACIÓN PARA ACTIVATE_DRAFT (publish_post) ===
+// ============================================================
 
-// Parsear error categorizado de Late.dev (changelog Feb 2, 2026)
+export function validateAndPrepareActivation(
+  input: {
+    publish_now?: boolean;
+    scheduled_for?: string;
+    timezone?: string;
+    use_queue?: boolean;
+    queue_profile_id?: string;
+  }
+): ActivateValidationResult {
+
+  const data: ValidatedActivateData = {};
+
+  if (input.use_queue) {
+    data.queuedFromProfile = input.queue_profile_id || '6984c371b984889d86a8b3d6';
+    // NO agregar publishNow ni scheduledFor — Late.dev asigna el slot
+  } else if (input.publish_now) {
+    data.publishNow = true;
+  } else if (input.scheduled_for) {
+    data.scheduledFor = input.scheduled_for;
+    data.timezone = input.timezone || PR_TIMEZONE;
+  } else {
+    // Sin instrucción específica → programar al próximo horario óptimo
+    data.scheduledFor = getNextOptimalTime();
+    data.timezone = PR_TIMEZONE;
+  }
+
+  return { success: true, data };
+}
+
+// ============================================================
+// === CREAR DRAFT CON RETRY ===
+// ============================================================
+
+export async function createDraftWithRetry(
+  data: ValidatedDraftData
+): Promise<{ message: string; post: LatePost; duplicate?: boolean }> {
+  try {
+    const result = await createDraftPost({
+      content: data.content,
+      platforms: data.platforms,
+      mediaItems: data.mediaItems,
+      timezone: data.timezone,
+    });
+    return result;
+  } catch (firstError) {
+    console.error('[Pioneer] Primer intento de crear draft falló:', firstError);
+
+    // === MANEJO NATIVO: Error 409 — Duplicado detectado por Late.dev ===
+    if (firstError instanceof LateApiError && firstError.status === 409) {
+      console.log('[Pioneer] Late.dev detectó contenido duplicado (409). Retornando como éxito parcial.');
+      let existingPostId: string | undefined;
+      try {
+        const body = JSON.parse(firstError.body);
+        existingPostId = body.details?.existingPostId;
+      } catch { /* body no parseable */ }
+
+      return {
+        message: 'Este contenido ya fue publicado en las últimas 24 horas.',
+        post: {
+          _id: existingPostId || 'unknown',
+          content: data.content,
+          status: 'published' as const,
+          platforms: [],
+        },
+        duplicate: true,
+      };
+    }
+
+    // Parsear errorCategory de Late.dev
+    if (firstError instanceof LateApiError) {
+      const errorInfo = parseLateDevError(firstError);
+      if (errorInfo) {
+        console.log(`[Pioneer] Late.dev errorCategory: ${errorInfo.category}, source: ${errorInfo.source}`);
+        if (errorInfo.source === 'user') {
+          throw firstError; // No reintentar errores de usuario
+        }
+      }
+    }
+
+    if (!isTransientError(firstError)) {
+      throw firstError;
+    }
+
+    const retryAfterMs = getRetryAfterMs(firstError);
+    const waitTime = retryAfterMs || 2000;
+
+    console.log(`[Pioneer] Error transitorio creando draft. Reintentando en ${waitTime}ms...`);
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+
+    try {
+      return await createDraftPost({
+        content: data.content,
+        platforms: data.platforms,
+        mediaItems: data.mediaItems,
+        timezone: data.timezone,
+      });
+    } catch (retryError) {
+      console.error('[Pioneer] Retry de draft falló:', retryError);
+      throw retryError;
+    }
+  }
+}
+
+// ============================================================
+// === ACTIVAR DRAFT CON RETRY ===
+// ============================================================
+
+export async function activateDraftWithRetry(
+  draftId: string,
+  data: ValidatedActivateData
+): Promise<{ message: string; post: LatePost }> {
+  try {
+    const result = await activateDraft(draftId, data);
+    return result;
+  } catch (firstError) {
+    console.error('[Pioneer] Primer intento de activar draft falló:', firstError);
+
+    // === MANEJO NATIVO: Error 409 en activación ===
+    if (firstError instanceof LateApiError && firstError.status === 409) {
+      console.log('[Pioneer] Late.dev detectó duplicado en activación (409).');
+      let existingPostId: string | undefined;
+      try {
+        const body = JSON.parse(firstError.body);
+        existingPostId = body.details?.existingPostId;
+      } catch { /* body no parseable */ }
+
+      return {
+        message: 'Este contenido ya fue publicado en las últimas 24 horas.',
+        post: {
+          _id: existingPostId || draftId,
+          content: '',
+          status: 'published' as const,
+          platforms: [],
+        },
+      };
+    }
+
+    if (firstError instanceof LateApiError) {
+      const errorInfo = parseLateDevError(firstError);
+      if (errorInfo) {
+        console.log(`[Pioneer] Late.dev errorCategory: ${errorInfo.category}, source: ${errorInfo.source}`);
+        if (errorInfo.source === 'user') {
+          throw firstError;
+        }
+      }
+    }
+
+    if (!isTransientError(firstError)) {
+      throw firstError;
+    }
+
+    const retryAfterMs = getRetryAfterMs(firstError);
+    const waitTime = retryAfterMs || 2000;
+
+    console.log(`[Pioneer] Error transitorio activando draft. Reintentando en ${waitTime}ms...`);
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+
+    try {
+      return await activateDraft(draftId, data);
+    } catch (retryError) {
+      console.error('[Pioneer] Retry de activación falló:', retryError);
+      throw retryError;
+    }
+  }
+}
+
+// ============================================================
+// === HELPERS DE ERROR (internos) ===
+// ============================================================
+
 interface LateErrorInfo {
   category: 'auth_expired' | 'user_content' | 'user_abuse' | 'account_issue' | 'platform_rejected' | 'platform_error' | 'system_error' | 'unknown';
   source: 'user' | 'platform' | 'system' | 'unknown';
@@ -245,7 +408,6 @@ function parseLateDevError(error: LateApiError): LateErrorInfo | null {
   return null;
 }
 
-// Detectar errores transitorios (entre Pioneer y Late.dev)
 function isTransientError(error: unknown): boolean {
   if (error instanceof LateApiError) {
     if (error.status >= 500) {
@@ -260,58 +422,14 @@ function isTransientError(error: unknown): boolean {
   return false;
 }
 
-// Obtener tiempo de espera del Retry-After header de Late.dev
 function getRetryAfterMs(error: unknown): number | null {
   if (error instanceof LateApiError) {
-    // Usar retryAfterMs extraído del header en lateRequest()
     if (error.retryAfterMs) {
       return error.retryAfterMs;
     }
-    // Fallback para 429 sin header: 10s basado en velocity limit de 15 posts/hora
     if (error.status === 429) {
       return 10_000;
     }
   }
   return null;
-}
-
-export async function publishWithRetry(
-  data: ValidatedPublishData
-): Promise<{ message: string; post: unknown }> {
-  try {
-    const result = await createPost(data);
-    return result;
-  } catch (firstError) {
-    console.error('[Pioneer] Primer intento de publicación falló:', firstError);
-
-    // Parsear errorCategory de Late.dev si disponible
-    if (firstError instanceof LateApiError) {
-      const errorInfo = parseLateDevError(firstError);
-      if (errorInfo) {
-        console.log(`[Pioneer] Late.dev errorCategory: ${errorInfo.category}, source: ${errorInfo.source}`);
-        // No reintentar errores de usuario o contenido — el cliente necesita actuar
-        if (errorInfo.source === 'user') {
-          throw firstError;
-        }
-      }
-    }
-
-    if (!isTransientError(firstError)) {
-      throw firstError;
-    }
-
-    // Leer Retry-After header si disponible (Late.dev lo envía en 429)
-    const retryAfterMs = getRetryAfterMs(firstError);
-    const waitTime = retryAfterMs || 2000;
-
-    console.log(`[Pioneer] Error transitorio. Reintentando en ${waitTime}ms...`);
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
-
-    try {
-      return await createPost(data);
-    } catch (retryError) {
-      console.error('[Pioneer] Retry falló:', retryError);
-      throw retryError;
-    }
-  }
 }

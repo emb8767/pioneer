@@ -13,48 +13,16 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// === DETECCIÓN DE ALUCINACIÓN DE PUBLICACIÓN ===
-// Detecta cuando Claude dice "publicado" o "programado" sin haber llamado publish_post
-const PUBLISH_HALLUCINATION_PATTERNS = [
-  // === "publicado" variants ===
-  /publicado exitosamente/i,
-  /publicado con éxito/i,
-  /publicación exitosa/i,
-  /✅.*publicado/i,
-  /post publicado/i,
-  /se ha publicado/i,
-  /fue publicado/i,
-  /publicamos exitosamente/i,
-  /published successfully/i,
-  // === "programado" variants (Bug 10.2 fix) ===
-  /programado exitosamente/i,
-  /programado con éxito/i,
-  /programación exitosa/i,
-  /✅.*programado/i,
-  /post programado para/i,
-  /se ha programado/i,
-  /fue programado/i,
-  /scheduled successfully/i,
-];
+// === DRAFT-FIRST: Sin detección de alucinaciones ===
+// Con el flujo Draft-First, las alucinaciones de publicación y de imagen
+// ya no son un problema porque:
+// 1. Claude no puede "publicar" sin draft_id — publish_post requiere uno
+// 2. Las imágenes se vinculan al draft en Late.dev, no dependen del texto de Claude
+// 3. Duplicados son imposibles porque PUT al mismo draft_id no crea post nuevo
 
-function detectPublishHallucination(text: string, publishPostCount: number): boolean {
-  if (publishPostCount > 0) return false;
-  return PUBLISH_HALLUCINATION_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-// === DETECCIÓN DE ALUCINACIÓN DE IMAGEN ===
-// Detecta cuando Claude incluye URLs de imagen en su texto sin haber llamado generate_image
-const IMAGE_URL_PATTERNS = [
-  /https:\/\/media\.getlate\.dev\/[^\s)]+/,
-  /https:\/\/replicate\.delivery\/[^\s)]+/,
-];
-
-function detectImageHallucination(text: string, generateImageWasCalled: boolean): boolean {
-  if (generateImageWasCalled) return false;
-  return IMAGE_URL_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-const MAX_TOOL_USE_ITERATIONS = 10;
+// Flujo típico: list_accounts → generate_content → generate_image → create_draft → publish_post = 5 iteraciones
+// Con queue setup: +1. Margen: 8 total.
+const MAX_TOOL_USE_ITERATIONS = 8;
 
 export async function POST(request: NextRequest) {
   try {
@@ -86,14 +54,13 @@ export async function POST(request: NextRequest) {
       console.warn('[Pioneer] No se pudo leer OAuth cookie:', error);
     }
 
-    // === TRACKING ===
+    // === TRACKING SIMPLIFICADO (Draft-First) ===
+    // Solo necesitamos rastrear imágenes generadas y el draft actual.
+    // No hay tracking de alucinaciones, no hay resets complejos.
     let currentMessages = [...formattedMessages];
     let finalTextParts: string[] = [];
     let generateImageWasCalled = false;
     let lastGeneratedImageUrls: string[] = [];
-    let publishPostCount = 0;
-    let hallucinationRetryUsed = false;
-    let imageHallucinationRetryUsed = false;
     let shouldClearOAuthCookie = false;
     let linkedInCachedData: Record<string, unknown> | null = null;
     let cachedConnectionOptions: Array<{ id: string; name: string }> | null = null;
@@ -122,57 +89,19 @@ export async function POST(request: NextRequest) {
       if (response.stop_reason === 'end_turn') {
         let fullText = finalTextParts.join('\n\n');
 
-        // === INYECCIÓN AUTOMÁTICA DE URL DE IMAGEN ===
-        // Si generate_image fue llamada en este request y la URL NO aparece en el texto,
-        // inyectarla automáticamente. Esto elimina la dependencia de que Claude pegue la URL.
+        // === INYECCIÓN DE URL DE IMAGEN (mantener para UX) ===
+        // Si generate_image fue llamada y la URL NO aparece en el texto,
+        // inyectarla para que el chat UI la renderice como imagen visible.
         if (generateImageWasCalled && lastGeneratedImageUrls.length > 0) {
           const hasImageUrl = lastGeneratedImageUrls.some(url => fullText.includes(url));
           if (!hasImageUrl) {
-            console.log(`[Pioneer] Inyectando ${lastGeneratedImageUrls.length} URL(s) de imagen en respuesta (Claude no las incluyó)`);
+            console.log(`[Pioneer] Inyectando ${lastGeneratedImageUrls.length} URL(s) de imagen en respuesta`);
             const urlBlock = lastGeneratedImageUrls.join('\n\n');
             fullText = fullText + '\n\n' + urlBlock;
-            // Reemplazar finalTextParts para que los checks posteriores usen el texto actualizado
-            finalTextParts = [fullText];
           }
         }
 
-        // Detección de alucinación de publicación/programación
-        if (detectPublishHallucination(fullText, publishPostCount) && !hallucinationRetryUsed) {
-          console.warn('[Pioneer] ⚠️ ALUCINACIÓN DETECTADA: Claude dijo "publicado/programado" sin llamar publish_post. Forzando retry.');
-          hallucinationRetryUsed = true;
-
-          let correctiveMessage = 'ERROR DEL SISTEMA: No se ejecutó la publicación ni programación. Debes llamar la tool publish_post para publicar o programar el post. El cliente ya aprobó. Llama publish_post ahora con el contenido que generaste anteriormente. NO respondas con texto — usa la tool publish_post.';
-
-          if (lastGeneratedImageUrls.length > 0) {
-            correctiveMessage += ` IMPORTANTE: NO generes nuevas imágenes. Usa estas URLs que ya generaste: ${JSON.stringify(lastGeneratedImageUrls)}`;
-          }
-
-          currentMessages = [
-            ...currentMessages,
-            { role: 'assistant' as const, content: response.content },
-            { role: 'user' as const, content: correctiveMessage },
-          ];
-          finalTextParts = [];
-          continue;
-        }
-
-        // Detección de alucinación de imagen — Claude muestra URL sin llamar generate_image
-        if (detectImageHallucination(fullText, generateImageWasCalled) && !imageHallucinationRetryUsed) {
-          console.warn('[Pioneer] ⚠️ ALUCINACIÓN DE IMAGEN DETECTADA: Claude incluyó URL de imagen sin llamar generate_image. Forzando retry.');
-          imageHallucinationRetryUsed = true;
-
-          const correctiveMessage = 'ERROR DEL SISTEMA: Incluiste una URL de imagen en tu respuesta sin haber llamado la tool generate_image. Cada imagen NUEVA requiere llamar generate_image — NUNCA reutilices URLs de posts anteriores ni de tu memoria. El cliente pidió una imagen. Llama generate_image ahora con un prompt apropiado para este post. NO respondas con texto — usa la tool generate_image.';
-
-          currentMessages = [
-            ...currentMessages,
-            { role: 'assistant' as const, content: response.content },
-            { role: 'user' as const, content: correctiveMessage },
-          ];
-          finalTextParts = [];
-          continue;
-        }
-
-        // Construir respuesta con cookie clearing si necesario
+        // === RESPUESTA FINAL ===
         const jsonResponse = NextResponse.json({
           message: fullText,
           usage: response.usage,
@@ -215,15 +144,13 @@ export async function POST(request: NextRequest) {
             toolBlock.name,
             toolBlock.input as Record<string, unknown>,
             generateImageWasCalled,
-            publishPostCount,
-            hallucinationRetryUsed,
             lastGeneratedImageUrls,
             pendingOAuthData,
             linkedInCachedData,
             cachedConnectionOptions
           );
 
-          // Actualizar tracking
+          // === TRACKING: generate_image ===
           if (toolBlock.name === 'generate_image') {
             generateImageWasCalled = true;
             try {
@@ -238,17 +165,15 @@ export async function POST(request: NextRequest) {
             }
           }
 
+          // === TRACKING: publish_post (draft activado) ===
           if (toolResult.publishPostCalled) {
-            publishPostCount += 1;
-            // === RESET para siguiente post: limpiar tracking de imagen ===
-            // Cada post es un ciclo independiente. Después de publicar exitosamente,
-            // resetear para que el siguiente post no reutilice datos del anterior.
+            // Draft fue activado exitosamente.
+            // Resetear imagen tracking para el siguiente post del plan.
             generateImageWasCalled = false;
             lastGeneratedImageUrls = [];
-            hallucinationRetryUsed = false;
-            imageHallucinationRetryUsed = false;
-            console.log('[Pioneer] Post publicado — tracking de imagen reseteado para siguiente post');
+            console.log('[Pioneer] Draft activado — tracking reseteado para siguiente post');
           }
+
           if (toolResult.shouldClearOAuthCookie) shouldClearOAuthCookie = true;
           if (toolResult.linkedInDataToCache) linkedInCachedData = toolResult.linkedInDataToCache;
           if (toolResult.connectionOptionsToCache) cachedConnectionOptions = toolResult.connectionOptionsToCache;

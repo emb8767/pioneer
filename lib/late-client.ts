@@ -1,5 +1,11 @@
 // Cliente de Late.dev para Pioneer Agent
 // Documentación: https://docs.getlate.dev
+//
+// === CAMBIOS Draft-First ===
+// - createDraftPost(): POST /v1/posts con isDraft: true
+// - activateDraft(): PUT /v1/posts/{id} para cambiar draft → scheduled/publishNow/queued
+// - updatePost(): corregido de PATCH a PUT (según docs Late.dev)
+// - Detección nativa de duplicados via HTTP 409
 
 import type {
   LateProfile,
@@ -42,7 +48,6 @@ async function lateRequest<T>(
 
   if (!response.ok) {
     const errorBody = await response.text();
-    // Extraer Retry-After header (Late.dev lo envía en respuestas 429)
     const retryAfterHeader = response.headers.get('Retry-After');
     const retryAfterMs = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : null;
     throw new LateApiError(
@@ -96,7 +101,6 @@ export async function listAccounts(): Promise<{ accounts: LateAccount[] }> {
 
 // === OAUTH — CONNECT ===
 
-// Plataformas que requieren selección adicional → headless automático
 const HEADLESS_PLATFORMS = new Set([
   'facebook',
   'instagram',
@@ -106,43 +110,24 @@ const HEADLESS_PLATFORMS = new Set([
   'snapchat',
 ]);
 
-/**
- * Determina si una plataforma usa OAuth headless.
- */
 export function isHeadlessPlatform(platform: string): boolean {
   return HEADLESS_PLATFORMS.has(platform);
 }
 
-/**
- * Genera la URL de OAuth para conectar una cuenta de red social.
- * 
- * Automáticamente usa headless=true para plataformas que requieren
- * selección adicional (Facebook, Instagram, LinkedIn, Pinterest,
- * Google Business, Snapchat).
- * 
- * Standard mode: Late.dev redirige al callback con ?connected=platform
- * Headless mode: Late.dev redirige al callback con tokens temporales + step=select_*
- */
 export async function getConnectUrl(
   platform: Platform,
   profileId: string,
   options?: { headless?: boolean }
 ): Promise<{ authUrl: string }> {
   const callbackUrl = `${getAppUrl()}/api/social/callback`;
-  
-  // Auto-detect headless para plataformas que lo requieren
   const useHeadless = options?.headless ?? HEADLESS_PLATFORMS.has(platform);
-  
   let endpoint = `/connect/${platform}?profileId=${profileId}&redirect_url=${encodeURIComponent(callbackUrl)}`;
-  
   if (useHeadless) {
     endpoint += '&headless=true';
   }
-  
   return lateRequest(endpoint);
 }
 
-// Bluesky usa App Password en vez de OAuth
 export async function connectBluesky(
   profileId: string,
   handle: string,
@@ -157,8 +142,6 @@ export async function connectBluesky(
 // ============================================================
 // === HEADLESS OAUTH — Obtener opciones y guardar selección ===
 // ============================================================
-
-// --- Facebook: Obtener páginas disponibles ---
 
 export interface FacebookPage {
   id: string;
@@ -176,11 +159,7 @@ export async function getFacebookPages(
 ): Promise<{ pages: FacebookPage[] }> {
   return lateRequest(
     `/connect/facebook/select-page?profileId=${profileId}&tempToken=${encodeURIComponent(tempToken)}`,
-    {
-      headers: {
-        'X-Connect-Token': connectToken,
-      },
-    }
+    { headers: { 'X-Connect-Token': connectToken } }
   );
 }
 
@@ -193,21 +172,13 @@ export async function saveFacebookPage(
 ): Promise<unknown> {
   return lateRequest('/connect/facebook/select-page', {
     method: 'POST',
-    headers: {
-      'X-Connect-Token': connectToken,
-    },
-    body: JSON.stringify({
-      profileId,
-      pageId,
-      tempToken,
-      userProfile,
-    }),
+    headers: { 'X-Connect-Token': connectToken },
+    body: JSON.stringify({ profileId, pageId, tempToken, userProfile }),
   });
 }
 
-// --- LinkedIn: Obtener datos pendientes ---
-// ⚠️ IMPORTANTE: Este endpoint es de UN SOLO USO — los datos se borran después de consultarlos.
-// Expiran en 10 minutos.
+// --- LinkedIn ---
+// ⚠️ pendingDataToken es de UN SOLO USO — expira en 10 minutos.
 
 export interface LinkedInPendingData {
   platform: string;
@@ -222,11 +193,7 @@ export interface LinkedInPendingData {
     profilePicture?: string;
   };
   selectionType?: string;
-  organizations?: Array<{
-    id: string;
-    urn: string;
-    name: string;
-  }>;
+  organizations?: Array<{ id: string; urn: string; name: string }>;
 }
 
 export async function getLinkedInPendingData(
@@ -245,20 +212,15 @@ export async function saveLinkedInOrganization(
 ): Promise<unknown> {
   return lateRequest('/connect/linkedin/select-organization', {
     method: 'POST',
-    headers: {
-      'X-Connect-Token': connectToken,
-    },
+    headers: { 'X-Connect-Token': connectToken },
     body: JSON.stringify({
-      profileId,
-      tempToken,
-      userProfile,
-      accountType,
+      profileId, tempToken, userProfile, accountType,
       ...(selectedOrganization && { selectedOrganization }),
     }),
   });
 }
 
-// --- Pinterest: Obtener boards ---
+// --- Pinterest ---
 
 export interface PinterestBoard {
   id: string;
@@ -274,11 +236,7 @@ export async function getPinterestBoards(
 ): Promise<{ boards: PinterestBoard[] }> {
   return lateRequest(
     `/connect/pinterest/select-board?profileId=${profileId}&tempToken=${encodeURIComponent(tempToken)}`,
-    {
-      headers: {
-        'X-Connect-Token': connectToken,
-      },
-    }
+    { headers: { 'X-Connect-Token': connectToken } }
   );
 }
 
@@ -292,20 +250,12 @@ export async function savePinterestBoard(
 ): Promise<unknown> {
   return lateRequest('/connect/pinterest/select-board', {
     method: 'POST',
-    headers: {
-      'X-Connect-Token': connectToken,
-    },
-    body: JSON.stringify({
-      profileId,
-      boardId,
-      boardName,
-      tempToken,
-      userProfile,
-    }),
+    headers: { 'X-Connect-Token': connectToken },
+    body: JSON.stringify({ profileId, boardId, boardName, tempToken, userProfile }),
   });
 }
 
-// --- Google Business: Obtener ubicaciones ---
+// --- Google Business ---
 
 export interface GoogleBusinessLocation {
   id: string;
@@ -320,11 +270,7 @@ export async function getGoogleBusinessLocations(
 ): Promise<{ locations: GoogleBusinessLocation[] }> {
   return lateRequest(
     `/connect/googlebusiness/locations?profileId=${profileId}&tempToken=${encodeURIComponent(tempToken)}`,
-    {
-      headers: {
-        'X-Connect-Token': connectToken,
-      },
-    }
+    { headers: { 'X-Connect-Token': connectToken } }
   );
 }
 
@@ -337,19 +283,12 @@ export async function saveGoogleBusinessLocation(
 ): Promise<unknown> {
   return lateRequest('/connect/googlebusiness/select-location', {
     method: 'POST',
-    headers: {
-      'X-Connect-Token': connectToken,
-    },
-    body: JSON.stringify({
-      profileId,
-      locationId,
-      tempToken,
-      userProfile,
-    }),
+    headers: { 'X-Connect-Token': connectToken },
+    body: JSON.stringify({ profileId, locationId, tempToken, userProfile }),
   });
 }
 
-// --- Snapchat: Guardar selección de perfil público ---
+// --- Snapchat ---
 
 export async function saveSnapchatProfile(
   profileId: string,
@@ -360,25 +299,80 @@ export async function saveSnapchatProfile(
 ): Promise<unknown> {
   return lateRequest('/connect/snapchat/select-profile', {
     method: 'POST',
-    headers: {
-      'X-Connect-Token': connectToken,
-    },
-    body: JSON.stringify({
-      profileId,
-      publicProfileId,
-      tempToken,
-      userProfile,
-    }),
+    headers: { 'X-Connect-Token': connectToken },
+    body: JSON.stringify({ profileId, publicProfileId, tempToken, userProfile }),
   });
 }
 
 // === POSTS ===
 
+/**
+ * Crea un post directamente (scheduled, publishNow, o queued).
+ * ⚠️ Para el flujo principal, usar createDraftPost() + activateDraft().
+ * Se mantiene por compatibilidad pero el flujo Draft-First es preferido.
+ */
 export async function createPost(
   data: PublishRequest
 ): Promise<{ message: string; post: LatePost }> {
   return lateRequest('/posts', {
     method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// ============================================================
+// === DRAFT-FIRST FLOW ===
+// ============================================================
+// Docs: https://docs.getlate.dev/core/posts
+//
+// Elimina duplicados por diseño:
+// 1. createDraftPost() → POST /v1/posts { isDraft: true } → retorna draft._id
+// 2. Cliente ve contenido + imagen y aprueba
+// 3. activateDraft() → PUT /v1/posts/{draft_id} → scheduled/publishNow/queued
+//
+// Si Claude intenta publicar de nuevo, PUT al mismo draft_id.
+// No se crea post nuevo. Si draft ya fue activado, Late.dev devuelve error claro.
+
+export interface DraftPostData {
+  content: string;
+  platforms: Array<{ platform: string; accountId: string }>;
+  mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
+  timezone?: string;
+}
+
+export async function createDraftPost(
+  data: DraftPostData
+): Promise<{ message: string; post: LatePost }> {
+  return lateRequest('/posts', {
+    method: 'POST',
+    body: JSON.stringify({
+      content: data.content,
+      platforms: data.platforms,
+      isDraft: true,
+      timezone: data.timezone || PR_TIMEZONE,
+      ...(data.mediaItems && data.mediaItems.length > 0 && {
+        mediaItems: data.mediaItems,
+      }),
+    }),
+  });
+}
+
+export interface ActivateDraftData {
+  publishNow?: boolean;
+  scheduledFor?: string;
+  timezone?: string;
+  queuedFromProfile?: string;
+  queueId?: string;
+  content?: string;
+  mediaItems?: Array<{ type: 'image' | 'video'; url: string }>;
+}
+
+export async function activateDraft(
+  postId: string,
+  data: ActivateDraftData
+): Promise<{ message: string; post: LatePost }> {
+  return lateRequest(`/posts/${postId}`, {
+    method: 'PUT',
     body: JSON.stringify(data),
   });
 }
@@ -393,12 +387,16 @@ export async function getPost(
   return lateRequest(`/posts/${postId}`);
 }
 
+/**
+ * Actualiza un post existente.
+ * PUT /v1/posts/{postId} — solo draft, scheduled, failed, partial pueden editarse.
+ */
 export async function updatePost(
   postId: string,
   data: Partial<PublishRequest>
 ): Promise<{ post: LatePost }> {
   return lateRequest(`/posts/${postId}`, {
-    method: 'PATCH',
+    method: 'PUT', // Corregido: Late.dev usa PUT, no PATCH
     body: JSON.stringify(data),
   });
 }
@@ -411,26 +409,8 @@ export async function deletePost(
   });
 }
 
-// === QUEUE (Late.dev) ===
-// Documentación: https://getlate.dev/queue-posts
-//
-// El Queue permite configurar horarios recurrentes semanales.
-// Cuando un post se envía con queuedFromProfile (sin scheduledFor),
-// Late.dev lo asigna automáticamente al próximo slot disponible.
-//
-// ⚠️ NUNCA llamar getQueueNextSlot() y usar ese tiempo en scheduledFor.
-//    Eso bypasea el queue y causa asignaciones duplicadas.
-//    Siempre usar queuedFromProfile en el POST /v1/posts directamente.
+// === QUEUE ===
 
-/**
- * Configura los horarios recurrentes del queue para un perfil.
- * PUT /v1/queue/slots
- * 
- * @param profileId - ID del perfil en Late.dev
- * @param timezone - Timezone del cliente (ej: "America/Puerto_Rico")
- * @param slots - Array de { dayOfWeek: 0-6, time: "HH:MM" }
- * @param active - Activar o desactivar el queue
- */
 export async function setupQueueSlots(
   profileId: string,
   timezone: string,
@@ -439,31 +419,16 @@ export async function setupQueueSlots(
 ): Promise<unknown> {
   return lateRequest('/queue/slots', {
     method: 'PUT',
-    body: JSON.stringify({
-      profileId,
-      timezone,
-      slots,
-      active,
-    }),
+    body: JSON.stringify({ profileId, timezone, slots, active }),
   });
 }
 
-/**
- * Obtiene el próximo slot disponible del queue (solo informativo).
- * GET /v1/queue/next-slot
- * 
- * ⚠️ NO usar este valor en scheduledFor — usar queuedFromProfile en createPost().
- */
 export async function getQueueNextSlot(
   profileId: string
 ): Promise<QueueNextSlotResponse> {
   return lateRequest(`/queue/next-slot?profileId=${profileId}`);
 }
 
-/**
- * Obtiene la configuración actual del queue para un perfil.
- * GET /v1/queue/slots
- */
 export async function getQueueSlots(
   profileId: string
 ): Promise<unknown> {
@@ -472,13 +437,7 @@ export async function getQueueSlots(
 
 // === HELPERS ===
 
-/**
- * Calcula el próximo horario óptimo de publicación para Puerto Rico.
- * Lun-Vie: 12:00 PM o 7:00 PM
- * Sáb-Dom: 10:00 AM o 1:00 PM
- */
 export function getNextOptimalTime(): string {
-  // Obtener hora actual en Puerto Rico usando Intl (correcto independientemente del timezone del servidor)
   const prFormatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Puerto_Rico',
     year: 'numeric',
@@ -497,9 +456,8 @@ export function getNextOptimalTime(): string {
   const month = parseInt(get('month'));
   const dayNum = parseInt(get('day'));
   const hour = parseInt(get('hour'));
-  const weekdayStr = get('weekday'); // Mon, Tue, Wed, Thu, Fri, Sat, Sun
+  const weekdayStr = get('weekday');
 
-  // Mapear weekday string a número (0=Sun como JS Date)
   const weekdayMap: Record<string, number> = {
     Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
   };
@@ -509,34 +467,28 @@ export function getNextOptimalTime(): string {
   let daysToAdd = 0;
 
   if (day >= 1 && day <= 5) {
-    // Lunes a Viernes
     if (hour < 12) {
       targetHour = 12;
     } else if (hour < 19) {
       targetHour = 19;
     } else {
-      // Ya pasaron los horarios de hoy, programar para mañana
       daysToAdd = 1;
-      targetHour = day === 5 ? 10 : 12; // Si es viernes, mañana es sábado
+      targetHour = day === 5 ? 10 : 12;
     }
   } else {
-    // Sábado o Domingo
     if (hour < 10) {
       targetHour = 10;
     } else if (hour < 13) {
       targetHour = 13;
     } else {
-      // Ya pasaron los horarios del fin de semana
-      daysToAdd = day === 6 ? 2 : 1; // Sáb→Lun, Dom→Lun
+      daysToAdd = day === 6 ? 2 : 1;
       targetHour = 12;
     }
   }
 
-  // Construir fecha target — componentes ya están en timezone PR
   const target = new Date(year, month - 1, dayNum + daysToAdd);
   const pad = (n: number) => n.toString().padStart(2, '0');
 
-  // Formato ISO sin milisegundos ni Z (Late.dev requirement)
   return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(targetHour)}:00:00`;
 }
 

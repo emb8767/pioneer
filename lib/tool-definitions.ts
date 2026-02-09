@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 
-// === TOOLS DISPONIBLES PARA CLAUDE (9 tools) ===
+// === TOOLS DISPONIBLES PARA CLAUDE (10 tools) ===
+// Cambio Draft-First: nueva tool create_draft, publish_post ahora requiere draft_id
 export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'list_connected_accounts',
@@ -114,7 +115,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_image',
     description:
-      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Las imágenes se suben automáticamente a Late.dev y devuelve URLs permanentes (https://media.getlate.dev/...) que se usan en media_urls de publish_post. Las URLs permanentes NO expiran. NO llames esta tool si ya generaste imágenes para este post — reutiliza las URLs existentes.',
+      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Las imágenes se suben automáticamente a Late.dev y devuelve URLs permanentes (https://media.getlate.dev/...) que se usan en create_draft. Las URLs permanentes NO expiran. NO llames esta tool si ya generaste imágenes para este post — reutiliza las URLs existentes.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -144,16 +145,17 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
       required: ['prompt'],
     },
   },
+  // === DRAFT-FIRST: Nueva tool ===
   {
-    name: 'publish_post',
+    name: 'create_draft',
     description:
-      'Publica o programa un post en las redes sociales del cliente. DEBES llamar esta tool para publicar — NUNCA confirmes una publicación sin haberla llamado. Tres modos: (1) publish_now: true para publicar inmediatamente, (2) scheduled_for para fecha específica, (3) use_queue: true para agregar a la cola de publicación automática. Usar URLs de media.getlate.dev o replicate.delivery obtenidas de generate_image.',
+      'Crea un borrador del post en Late.dev con el texto y las imágenes. El borrador NO se publica — queda guardado hasta que el cliente apruebe y se active con publish_post. DEBES llamar esta tool DESPUÉS de que el cliente apruebe el texto y la imagen, ANTES de preguntar cuándo publicar. Retorna un draft_id que publish_post necesita para activar la publicación. El flujo correcto es: generate_content → generate_image → create_draft → cliente dice cuándo → publish_post.',
     input_schema: {
       type: 'object' as const,
       properties: {
         content: {
           type: 'string',
-          description: 'El texto del post a publicar',
+          description: 'El texto del post (de generate_content)',
         },
         platforms: {
           type: 'array',
@@ -163,19 +165,9 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
               platform: {
                 type: 'string',
                 enum: [
-                  'facebook',
-                  'instagram',
-                  'linkedin',
-                  'twitter',
-                  'tiktok',
-                  'youtube',
-                  'threads',
-                  'reddit',
-                  'pinterest',
-                  'bluesky',
-                  'googlebusiness',
-                  'telegram',
-                  'snapchat',
+                  'facebook', 'instagram', 'linkedin', 'twitter', 'tiktok',
+                  'youtube', 'threads', 'reddit', 'pinterest', 'bluesky',
+                  'googlebusiness', 'telegram', 'snapchat',
                 ],
               },
               account_id: {
@@ -185,47 +177,62 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
             },
             required: ['platform', 'account_id'],
           },
-          description:
-            'Lista de plataformas y sus account IDs donde publicar',
-        },
-        publish_now: {
-          type: 'boolean',
-          description:
-            'Si es true, publica inmediatamente. Si es false, debe proporcionar scheduled_for o use_queue.',
-        },
-        scheduled_for: {
-          type: 'string',
-          description:
-            'Fecha y hora para programar la publicación en formato ISO 8601 (ej: 2026-02-06T12:00:00)',
-        },
-        timezone: {
-          type: 'string',
-          description: 'Zona horaria para la programación',
+          description: 'Lista de plataformas y sus account IDs',
         },
         media_urls: {
           type: 'array',
           items: { type: 'string' },
           description:
-            'URLs de imágenes o videos a incluir en el post. Usar URLs de media.getlate.dev o replicate.delivery obtenidas de generate_image.',
+            'URLs de imágenes permanentes de media.getlate.dev obtenidas de generate_image. Opcional para posts sin imagen.',
+        },
+      },
+      required: ['content', 'platforms'],
+    },
+  },
+  // === DRAFT-FIRST: publish_post ahora ACTIVA un draft existente ===
+  {
+    name: 'publish_post',
+    description:
+      'Activa un borrador previamente creado con create_draft. Cambia su estado de "draft" a programado o publicado inmediatamente. REQUIERE draft_id devuelto por create_draft. El flujo correcto es: create_draft (guarda el post) → publish_post (lo activa). Tres modos: (1) publish_now: true para publicar inmediatamente, (2) scheduled_for para fecha específica, (3) use_queue: true para cola automática. NUNCA llames publish_post sin antes haber llamado create_draft.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        draft_id: {
+          type: 'string',
+          description: 'ID del borrador devuelto por create_draft. OBLIGATORIO.',
+        },
+        publish_now: {
+          type: 'boolean',
+          description:
+            'Si es true, publica inmediatamente.',
+        },
+        scheduled_for: {
+          type: 'string',
+          description:
+            'Fecha y hora para programar en formato ISO 8601 (ej: 2026-02-14T12:00:00)',
+        },
+        timezone: {
+          type: 'string',
+          description: 'Zona horaria para la programación',
         },
         use_queue: {
           type: 'boolean',
           description:
-            'Si es true, agrega el post a la cola de publicación en vez de publicar ahora o programar para fecha específica. Late.dev asigna automáticamente el próximo horario disponible del queue. Usar para posts de planes aprobados. NO combinar con publish_now o scheduled_for.',
+            'Si es true, agrega a la cola de publicación. Late.dev asigna automáticamente el próximo horario. NO combinar con publish_now o scheduled_for.',
         },
         queue_profile_id: {
           type: 'string',
           description: 'ID del perfil para el queue. Default: 6984c371b984889d86a8b3d6',
         },
       },
-      required: ['content', 'platforms'],
+      required: ['draft_id'],
     },
   },
   // === TOOLS: OAuth Headless ===
   {
     name: 'get_pending_connection',
     description:
-      'Obtiene las opciones de selección para completar una conexión de red social headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat). Llámala INMEDIATAMENTE cuando el cliente regresa de autorizar una plataforma headless (verás un mensaje como "Acabo de autorizar [plataforma]. Necesito completar la conexión."). Devuelve las páginas, organizaciones, boards, ubicaciones o perfiles disponibles para que el cliente elija.',
+      'Obtiene las opciones de selección para completar una conexión de red social headless (Facebook, Instagram, LinkedIn, Pinterest, Google Business, Snapchat). Llámala INMEDIATAMENTE cuando el cliente regresa de autorizar una plataforma headless.',
     input_schema: {
       type: 'object' as const,
       properties: {},
@@ -235,7 +242,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'complete_connection',
     description:
-      'Completa una conexión headless guardando la selección del cliente (la página, organización, board, ubicación o perfil que eligió). Llámala después de que el cliente selecciona una opción de las devueltas por get_pending_connection. Para LinkedIn, DEBES incluir _linkedin_data si fue devuelto por get_pending_connection.',
+      'Completa una conexión headless guardando la selección del cliente. Llámala después de que el cliente selecciona una opción de las devueltas por get_pending_connection. Para LinkedIn, DEBES incluir _linkedin_data.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -246,15 +253,15 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
         },
         selection_id: {
           type: 'string',
-          description: 'El ID de la opción seleccionada por el cliente (page ID, organization ID, board ID, location ID, o profile ID)',
+          description: 'El ID de la opción seleccionada por el cliente',
         },
         selection_name: {
           type: 'string',
-          description: 'El nombre de la opción seleccionada (para confirmación al cliente)',
+          description: 'El nombre de la opción seleccionada (para confirmación)',
         },
         _linkedin_data: {
           type: 'object',
-          description: 'Datos de LinkedIn devueltos por get_pending_connection. OBLIGATORIO para LinkedIn porque el token es de un solo uso.',
+          description: 'Datos de LinkedIn devueltos por get_pending_connection. OBLIGATORIO para LinkedIn.',
           properties: {
             tempToken: { type: 'string' },
             userProfile: { type: 'object' },
@@ -279,7 +286,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'setup_queue',
     description:
-      'Configura los horarios recurrentes de publicación para el cliente. Úsala después de que el plan es aprobado para definir los días y horas en que se publicarán los posts automáticamente. Los horarios se repiten semanalmente. Solo necesita configurarse una vez por plan.',
+      'Configura los horarios recurrentes de publicación para el cliente. Los horarios se repiten semanalmente. Solo necesita configurarse una vez por plan.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -299,7 +306,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
             },
             required: ['day_of_week', 'time'],
           },
-          description: 'Lista de horarios semanales de publicación. Ejemplo: [{"day_of_week": 1, "time": "12:00"}, {"day_of_week": 3, "time": "19:00"}]',
+          description: 'Lista de horarios semanales de publicación.',
         },
         profile_id: {
           type: 'string',

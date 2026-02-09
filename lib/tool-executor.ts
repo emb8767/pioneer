@@ -1,11 +1,18 @@
-// Ejecutor de tools para Pioneer Agent
+// Ejecutor de tools para Pioneer Agent — Draft-First Flow
 // Llamadas directas a APIs (sin fetch HTTP — regla Vercel serverless)
+//
+// === CAMBIOS Draft-First ===
+// - Nueva tool create_draft: valida → createDraftPost() → retorna draft_id
+// - publish_post ahora ACTIVA un draft existente via PUT /v1/posts/{draft_id}
+// - Firma simplificada: eliminados parámetros de hallucination tracking
+// - Eliminado: auto-inyección de media_urls en retry, bloqueo de regen en retry
 
 import {
   listAccounts,
   getConnectUrl,
   PR_TIMEZONE,
   LateApiError,
+  deletePost,
   // Headless OAuth functions
   isHeadlessPlatform,
   getFacebookPages,
@@ -23,30 +30,49 @@ import {
 } from '@/lib/late-client';
 import { generateContent } from '@/lib/content-generator';
 import { generateImage } from '@/lib/replicate-client';
-import { validateAndPreparePublish, publishWithRetry } from '@/lib/publish-validator';
+import {
+  validateAndPrepareDraft,
+  validateAndPrepareActivation,
+  createDraftWithRetry,
+  activateDraftWithRetry,
+} from '@/lib/publish-validator';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform } from '@/lib/types';
 
 // === TIPO DE RETORNO DE executeTool ===
 export interface ToolResult {
   result: string;
-  publishPostCalled: boolean;
+  draftCreated: boolean;      // true si create_draft exitoso — route.ts guarda draft_id
+  draftId: string | null;     // ID del draft creado
+  publishPostCalled: boolean; // true si publish_post (activateDraft) exitoso
   shouldClearOAuthCookie: boolean;
   linkedInDataToCache: Record<string, unknown> | null;
   connectionOptionsToCache: Array<{ id: string; name: string }> | null;
 }
 
-// === DELAY HELPER ===
-const CAROUSEL_IMAGE_DELAY_MS = 10_000; // 10s entre imágenes — Replicate free plan: burst of 1
+// === DEFAULT RESULT HELPER ===
+function defaultResult(result: string, overrides?: Partial<ToolResult>): ToolResult {
+  return {
+    result,
+    draftCreated: false,
+    draftId: null,
+    publishPostCalled: false,
+    shouldClearOAuthCookie: false,
+    linkedInDataToCache: null,
+    connectionOptionsToCache: null,
+    ...overrides,
+  };
+}
 
-// === EJECUTAR TOOLS — LLAMADAS DIRECTAS (sin fetch HTTP) ===
+// === DELAY HELPER ===
+const CAROUSEL_IMAGE_DELAY_MS = 10_000; // 10s entre imágenes — Replicate free plan
+
+// === EJECUTAR TOOLS ===
 
 export async function executeTool(
   toolName: string,
   toolInput: Record<string, unknown>,
   generateImageWasCalled: boolean,
-  publishPostCount: number,
-  hallucinationRetryUsed: boolean,
   lastGeneratedImageUrls: string[],
   // OAuth headless context
   pendingOAuthData: OAuthPendingData | null,
@@ -57,17 +83,11 @@ export async function executeTool(
     switch (toolName) {
       case 'list_connected_accounts': {
         const result = await listAccounts();
-        return {
-          result: JSON.stringify({
-            success: true,
-            accounts: result.accounts,
-            count: result.accounts.length,
-          }),
-          publishPostCalled: false,
-          shouldClearOAuthCookie: false,
-          linkedInDataToCache: null,
-          connectionOptionsToCache: null,
-        };
+        return defaultResult(JSON.stringify({
+          success: true,
+          accounts: result.accounts,
+          count: result.accounts.length,
+        }));
       }
 
       case 'generate_connect_url': {
@@ -82,21 +102,15 @@ export async function executeTool(
 
         const headless = isHeadlessPlatform(input.platform);
 
-        return {
-          result: JSON.stringify({
-            success: true,
-            authUrl: result.authUrl,
-            platform: input.platform,
-            headless,
-            ...(headless && {
-              _note_for_pioneer: `Esta plataforma (${input.platform}) usa modo headless. Después de que el cliente autorice, regresará al chat con un mensaje automático. En ese momento debes llamar get_pending_connection para obtener las opciones de selección.`,
-            }),
+        return defaultResult(JSON.stringify({
+          success: true,
+          authUrl: result.authUrl,
+          platform: input.platform,
+          headless,
+          ...(headless && {
+            _note_for_pioneer: `Esta plataforma (${input.platform}) usa modo headless. Después de que el cliente autorice, regresará al chat con un mensaje automático. En ese momento debes llamar get_pending_connection para obtener las opciones de selección.`,
           }),
-          publishPostCalled: false,
-          shouldClearOAuthCookie: false,
-          linkedInDataToCache: null,
-          connectionOptionsToCache: null,
-        };
+        }));
       }
 
       case 'generate_content': {
@@ -118,38 +132,10 @@ export async function executeTool(
           tone: input.tone || 'professional',
           include_hashtags: input.include_hashtags !== false,
         });
-        return {
-          result: JSON.stringify(result),
-          publishPostCalled: false,
-          shouldClearOAuthCookie: false,
-          linkedInDataToCache: null,
-          connectionOptionsToCache: null,
-        };
+        return defaultResult(JSON.stringify(result));
       }
 
       case 'generate_image': {
-        // === FIX BUG 8.1: Bloquear regeneración en retry de alucinación ===
-        if (hallucinationRetryUsed && lastGeneratedImageUrls.length > 0) {
-          console.log(`[Pioneer] Reutilizando ${lastGeneratedImageUrls.length} imagen(es) existente(s) en retry de alucinación`);
-          return {
-            result: JSON.stringify({
-              success: true,
-              images: lastGeneratedImageUrls,
-              model: 'cached',
-              cost_real: 0,
-              cost_client: 0,
-              expires_in: '1 hora',
-              regenerated: false,
-              attempts: 0,
-              _note: 'Imagen(es) reutilizada(s) del intento anterior (no se generaron nuevas)',
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
-        }
-
         const input = toolInput as {
           prompt: string;
           model?: string;
@@ -168,7 +154,6 @@ export async function executeTool(
           const errors: string[] = [];
 
           for (let i = 0; i < imageCount; i++) {
-            // Delay entre imágenes (excepto la primera) — Replicate free plan
             if (i > 0) {
               console.log(`[Pioneer] Esperando ${CAROUSEL_IMAGE_DELAY_MS / 1000}s antes de generar imagen ${i + 1}/${imageCount}...`);
               await new Promise(resolve => setTimeout(resolve, CAROUSEL_IMAGE_DELAY_MS));
@@ -195,7 +180,6 @@ export async function executeTool(
             }
           }
 
-          // Verificar si todas las imágenes se subieron a Late.dev (permanentes)
           const allUploadedToLate = allImages.length > 0 && allImages.every(url => url.includes('media.getlate.dev'));
           const someUploadedToLate = allImages.some(url => url.includes('media.getlate.dev'));
 
@@ -226,16 +210,10 @@ export async function executeTool(
             resultObj.error = errors[0];
           }
 
-          return {
-            result: JSON.stringify(resultObj),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          return defaultResult(JSON.stringify(resultObj));
         }
 
-        // Imagen individual (flujo original)
+        // Imagen individual
         const result = await generateImage({
           prompt: input.prompt,
           model: (input.model as 'schnell' | 'pro') || 'schnell',
@@ -248,109 +226,148 @@ export async function executeTool(
           resultObj._note_for_pioneer = `IMPORTANTE: La primera imagen generada no fue accesible y se regeneró automáticamente. El costo total de imagen fue $${result.cost_client.toFixed(3)} (${result.attempts} intentos). Informa al cliente de este costo actualizado.`;
         }
 
-        return {
-          result: JSON.stringify(resultObj),
-          publishPostCalled: false,
-          shouldClearOAuthCookie: false,
-          linkedInDataToCache: null,
-          connectionOptionsToCache: null,
-        };
+        return defaultResult(JSON.stringify(resultObj));
       }
 
-      case 'publish_post': {
-        // === LÍMITE: MÁXIMO 1 publish_post POR REQUEST ===
-        if (publishPostCount >= 1) {
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: 'Solo puedes publicar 1 post por mensaje. Para publicar el siguiente post, espera a que el cliente envíe un nuevo mensaje confirmando que desea continuar.',
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
-        }
+      // ============================================================
+      // === DRAFT-FIRST: create_draft ===
+      // ============================================================
 
+      case 'create_draft': {
         const input = toolInput as {
           content: string;
           platforms: Array<{ platform: string; account_id: string }>;
+          media_urls?: string[];
+        };
+
+        // === VALIDACIÓN PREVENTIVA ===
+        const validation = await validateAndPrepareDraft(input, generateImageWasCalled);
+
+        if (!validation.success || !validation.data) {
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: validation.error,
+            corrections: validation.corrections,
+          }));
+        }
+
+        if (validation.corrections && validation.corrections.length > 0) {
+          console.log('[Pioneer] Correcciones preventivas en draft:', validation.corrections);
+        }
+
+        // === CREAR DRAFT EN LATE.DEV ===
+        try {
+          const result = await createDraftWithRetry(validation.data);
+
+          if (result.duplicate) {
+            return defaultResult(JSON.stringify({
+              success: true,
+              duplicate: true,
+              message: result.message,
+              existing_post_id: result.post._id,
+              _note_for_pioneer: 'Este contenido ya fue publicado. Informa al cliente que el contenido ya existe y pregunta si desea crear contenido diferente.',
+            }));
+          }
+
+          const draftId = result.post._id;
+          console.log(`[Pioneer] Draft creado exitosamente: ${draftId}`);
+
+          return defaultResult(JSON.stringify({
+            success: true,
+            draft_id: draftId,
+            status: 'draft',
+            message: 'Borrador creado en Late.dev. Ahora pregunta al cliente cuándo desea publicar (ahora, programado, o cola). Luego llama publish_post con el draft_id.',
+            content_preview: validation.data.content.substring(0, 100) + '...',
+            image_included: !!(validation.data.mediaItems && validation.data.mediaItems.length > 0),
+            ...(validation.corrections && validation.corrections.length > 0 && {
+              _corrections: validation.corrections,
+            }),
+          }), {
+            draftCreated: true,
+            draftId,
+          });
+        } catch (draftError) {
+          console.error('[Pioneer] Error creando draft:', draftError);
+
+          const errorMessage =
+            draftError instanceof LateApiError
+              ? `Error de Late.dev (HTTP ${draftError.status}): ${draftError.body}`
+              : draftError instanceof Error
+                ? draftError.message
+                : 'Error desconocido al crear borrador';
+
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: errorMessage,
+            corrections: validation.corrections,
+          }));
+        }
+      }
+
+      // ============================================================
+      // === DRAFT-FIRST: publish_post (activa un draft existente) ===
+      // ============================================================
+
+      case 'publish_post': {
+        const input = toolInput as {
+          draft_id: string;
           publish_now?: boolean;
           scheduled_for?: string;
           timezone?: string;
-          media_urls?: string[];
           use_queue?: boolean;
           queue_profile_id?: string;
         };
 
-        // === FIX BUG 8.1b: Inyectar imágenes automáticamente en retry de alucinación ===
-        if (hallucinationRetryUsed && lastGeneratedImageUrls.length > 0 && (!input.media_urls || input.media_urls.length === 0)) {
-          console.log(`[Pioneer] Inyectando ${lastGeneratedImageUrls.length} imagen(es) guardada(s) en publish_post durante retry`);
-          input.media_urls = lastGeneratedImageUrls;
+        if (!input.draft_id) {
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: 'ERROR: Se requiere draft_id. Debes llamar create_draft PRIMERO para crear el borrador y obtener el draft_id. El flujo correcto es: generate_content → generate_image → create_draft → publish_post.',
+          }));
         }
 
-        // === NIVEL 1: VALIDACIÓN PREVENTIVA ===
-        const validation = await validateAndPreparePublish(input, generateImageWasCalled);
+        // === VALIDAR DATOS DE ACTIVACIÓN ===
+        const activation = validateAndPrepareActivation(input);
 
-        if (!validation.success || !validation.data) {
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: validation.error,
-              corrections: validation.corrections,
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+        if (!activation.success || !activation.data) {
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: activation.error,
+          }));
         }
 
-        if (validation.corrections && validation.corrections.length > 0) {
-          console.log('[Pioneer] Correcciones preventivas:', validation.corrections);
-        }
-
-        // === NIVEL 2: PUBLICAR CON RETRY INTELIGENTE ===
+        // === ACTIVAR DRAFT VIA PUT /v1/posts/{draft_id} ===
         try {
-          const result = await publishWithRetry(validation.data);
-
-          const imageIncluded = !!(validation.data.mediaItems && validation.data.mediaItems.length > 0);
+          const result = await activateDraftWithRetry(input.draft_id, activation.data);
 
           let successMessage: string;
-          if (validation.data.queuedFromProfile) {
-            successMessage = `Post agregado a la cola de publicación. Se publicará automáticamente en el próximo horario disponible.`;
-          } else if (validation.data.publishNow) {
-            successMessage = 'Post publicado exitosamente';
+          if (activation.data.queuedFromProfile) {
+            successMessage = 'Post agregado a la cola de publicación. Se publicará automáticamente en el próximo horario disponible.';
+          } else if (activation.data.publishNow) {
+            successMessage = 'Post publicado exitosamente.';
           } else {
-            successMessage = `Post programado para ${validation.data.scheduledFor}`;
+            successMessage = `Post programado para ${activation.data.scheduledFor}.`;
           }
 
-          return {
-            result: JSON.stringify({
-              success: true,
-              message: successMessage,
-              post: result.post,
-              image_included: imageIncluded,
-              ...(validation.data.queuedFromProfile && {
-                queued: true,
-                queue_profile_id: validation.data.queuedFromProfile,
-              }),
-              ...(validation.data.scheduledFor && {
-                scheduledFor: validation.data.scheduledFor,
-                timezone: validation.data.timezone,
-              }),
-              ...(validation.corrections &&
-                validation.corrections.length > 0 && {
-                  _corrections: validation.corrections,
-                }),
+          console.log(`[Pioneer] Draft ${input.draft_id} activado exitosamente: ${successMessage}`);
+
+          return defaultResult(JSON.stringify({
+            success: true,
+            message: successMessage,
+            post: result.post,
+            draft_id: input.draft_id,
+            ...(activation.data.queuedFromProfile && {
+              queued: true,
+              queue_profile_id: activation.data.queuedFromProfile,
             }),
+            ...(activation.data.scheduledFor && {
+              scheduledFor: activation.data.scheduledFor,
+              timezone: activation.data.timezone,
+            }),
+          }), {
             publishPostCalled: true,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          });
         } catch (publishError) {
-          console.error('[Pioneer] Publicación falló después de validación y retry:', publishError);
+          console.error('[Pioneer] Error activando draft:', publishError);
 
           const errorMessage =
             publishError instanceof LateApiError
@@ -359,17 +376,11 @@ export async function executeTool(
                 ? publishError.message
                 : 'Error desconocido al publicar';
 
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: errorMessage,
-              corrections: validation.corrections,
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: errorMessage,
+            draft_id: input.draft_id,
+          }));
         }
       }
 
@@ -402,35 +413,23 @@ export async function executeTool(
           const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
           const slotDescriptions = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`);
 
-          return {
-            result: JSON.stringify({
-              success: true,
-              message: `Cola de publicación configurada: ${slotDescriptions.join(', ')}.${nextSlotInfo}`,
-              slots: formattedSlots,
-              timezone: PR_TIMEZONE,
-              profile_id: profileId,
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          return defaultResult(JSON.stringify({
+            success: true,
+            message: `Cola de publicación configurada: ${slotDescriptions.join(', ')}.${nextSlotInfo}`,
+            slots: formattedSlots,
+            timezone: PR_TIMEZONE,
+            profile_id: profileId,
+          }));
         } catch (error) {
           console.error('[Pioneer] Error configurando queue:', error);
           const errorMessage = error instanceof LateApiError
             ? `Error de Late.dev (HTTP ${error.status}): ${error.body}`
             : error instanceof Error ? error.message : 'Error desconocido';
 
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: `Error configurando cola de publicación: ${errorMessage}`,
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: `Error configurando cola de publicación: ${errorMessage}`,
+          }));
         }
       }
 
@@ -442,16 +441,10 @@ export async function executeTool(
         const pending = pendingOAuthData;
 
         if (!pending) {
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: 'No hay conexión pendiente. La sesión de autorización pudo haber expirado (10 minutos). El cliente debe intentar conectar la plataforma de nuevo usando generate_connect_url.',
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: 'No hay conexión pendiente. La sesión de autorización pudo haber expirado (10 minutos). El cliente debe intentar conectar la plataforma de nuevo usando generate_connect_url.',
+          }));
         }
 
         const { platform, step, profileId, tempToken, connectToken, pendingDataToken } = pending;
@@ -463,16 +456,10 @@ export async function executeTool(
             case 'facebook':
             case 'instagram': {
               if (!tempToken || !connectToken) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan tokens para obtener páginas de Facebook. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan tokens para obtener páginas de Facebook. El cliente debe intentar conectar de nuevo.',
+                }));
               }
               const fbResult = await getFacebookPages(profileId, tempToken, connectToken);
               const fbOptions = fbResult.pages.map(p => ({
@@ -481,34 +468,24 @@ export async function executeTool(
                 username: p.username || '',
                 category: p.category || '',
               }));
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  step,
-                  options_type: 'pages',
-                  options: fbOptions,
-                  message: `Se encontraron ${fbResult.pages.length} página(s) de Facebook. Muestre las opciones al cliente para que elija una.`,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: false,
-                linkedInDataToCache: null,
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                step,
+                options_type: 'pages',
+                options: fbOptions,
+                message: `Se encontraron ${fbResult.pages.length} página(s) de Facebook. Muestre las opciones al cliente para que elija una.`,
+              }), {
                 connectionOptionsToCache: fbOptions,
-              };
+              });
             }
 
             case 'linkedin': {
               if (!pendingDataToken) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Falta pendingDataToken para LinkedIn. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Falta pendingDataToken para LinkedIn. El cliente debe intentar conectar de nuevo.',
+                }));
               }
               const liResult = await getLinkedInPendingData(pendingDataToken);
               const liOptions: Array<{ id: string; name: string }> = [
@@ -519,43 +496,34 @@ export async function executeTool(
                   liOptions.push({ id: org.id, name: org.name });
                 }
               }
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  step,
-                  options_type: 'accounts',
-                  options: liOptions,
-                  message: `Se encontraron ${liOptions.length} opción(es) de LinkedIn. Muestre las opciones al cliente para que elija una.`,
-                  _linkedin_data: {
-                    tempToken: liResult.tempToken,
-                    userProfile: liResult.userProfile,
-                    organizations: liResult.organizations || [],
-                  },
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: false,
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                step,
+                options_type: 'accounts',
+                options: liOptions,
+                message: `Se encontraron ${liOptions.length} opción(es) de LinkedIn. Muestre las opciones al cliente para que elija una.`,
+                _linkedin_data: {
+                  tempToken: liResult.tempToken,
+                  userProfile: liResult.userProfile,
+                  organizations: liResult.organizations || [],
+                },
+              }), {
                 linkedInDataToCache: {
                   tempToken: liResult.tempToken,
                   userProfile: liResult.userProfile,
                   organizations: liResult.organizations || [],
                 },
                 connectionOptionsToCache: liOptions,
-              };
+              });
             }
 
             case 'pinterest': {
               if (!tempToken || !connectToken) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan tokens para obtener boards de Pinterest. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan tokens para obtener boards de Pinterest. El cliente debe intentar conectar de nuevo.',
+                }));
               }
               const pinResult = await getPinterestBoards(profileId, tempToken, connectToken);
               const pinOptions = pinResult.boards.map(b => ({
@@ -563,34 +531,24 @@ export async function executeTool(
                 name: b.name,
                 description: b.description || '',
               }));
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  step,
-                  options_type: 'boards',
-                  options: pinOptions,
-                  message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente.`,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: false,
-                linkedInDataToCache: null,
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                step,
+                options_type: 'boards',
+                options: pinOptions,
+                message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente.`,
+              }), {
                 connectionOptionsToCache: pinOptions,
-              };
+              });
             }
 
             case 'googlebusiness': {
               if (!tempToken || !connectToken) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan tokens para obtener ubicaciones de Google Business. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan tokens para obtener ubicaciones de Google Business. El cliente debe intentar conectar de nuevo.',
+                }));
               }
               const gbResult = await getGoogleBusinessLocations(profileId, tempToken, connectToken);
               const gbOptions = gbResult.locations.map(l => ({
@@ -598,78 +556,52 @@ export async function executeTool(
                 name: l.name,
                 address: l.address || '',
               }));
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  step,
-                  options_type: 'locations',
-                  options: gbOptions,
-                  message: `Se encontraron ${gbResult.locations.length} ubicación(es) de Google Business. Muestre las opciones al cliente.`,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: false,
-                linkedInDataToCache: null,
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                step,
+                options_type: 'locations',
+                options: gbOptions,
+                message: `Se encontraron ${gbResult.locations.length} ubicación(es) de Google Business. Muestre las opciones al cliente.`,
+              }), {
                 connectionOptionsToCache: gbOptions,
-              };
+              });
             }
 
             case 'snapchat': {
               if (!tempToken || !connectToken) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan tokens para Snapchat. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan tokens para Snapchat. El cliente debe intentar conectar de nuevo.',
+                }));
               }
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  step,
-                  options_type: 'profiles',
-                  options: [{ id: 'public_profile', name: 'Perfil público de Snapchat' }],
-                  message: 'Snapchat requiere seleccionar el perfil público para completar la conexión.',
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: false,
-                linkedInDataToCache: null,
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                step,
+                options_type: 'profiles',
+                options: [{ id: 'public_profile', name: 'Perfil público de Snapchat' }],
+                message: 'Snapchat requiere seleccionar el perfil público para completar la conexión.',
+              }), {
                 connectionOptionsToCache: [{ id: 'public_profile', name: 'Perfil público de Snapchat' }],
-              };
+              });
             }
 
             default:
-              return {
-                result: JSON.stringify({
-                  success: false,
-                  error: `Plataforma no soportada para conexión headless: ${platform}`,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: false,
-                linkedInDataToCache: null,
-                connectionOptionsToCache: null,
-              };
+              return defaultResult(JSON.stringify({
+                success: false,
+                error: `Plataforma no soportada para conexión headless: ${platform}`,
+              }));
           }
         } catch (error) {
           console.error(`[Pioneer] Error obteniendo opciones para ${platform}:`, error);
 
           if (error instanceof LateApiError && (error.status === 401 || error.status === 403)) {
-            return {
-              result: JSON.stringify({
-                success: false,
-                error: 'Los tokens de autorización expiraron. El cliente debe intentar conectar la plataforma de nuevo.',
-                expired: true,
-              }),
-              publishPostCalled: false,
-              shouldClearOAuthCookie: true,
-              linkedInDataToCache: null,
-              connectionOptionsToCache: null,
-            };
+            return defaultResult(JSON.stringify({
+              success: false,
+              error: 'Los tokens de autorización expiraron. El cliente debe intentar conectar la plataforma de nuevo.',
+              expired: true,
+            }), { shouldClearOAuthCookie: true });
           }
 
           throw error;
@@ -691,16 +623,10 @@ export async function executeTool(
         const pending = pendingOAuthData;
 
         if (!pending) {
-          return {
-            result: JSON.stringify({
-              success: false,
-              error: 'No hay conexión pendiente. La sesión pudo haber expirado. El cliente debe intentar conectar de nuevo.',
-            }),
-            publishPostCalled: false,
-            shouldClearOAuthCookie: false,
-            linkedInDataToCache: null,
-            connectionOptionsToCache: null,
-          };
+          return defaultResult(JSON.stringify({
+            success: false,
+            error: 'No hay conexión pendiente. La sesión pudo haber expirado. El cliente debe intentar conectar de nuevo.',
+          }));
         }
 
         const { platform, profileId, tempToken, connectToken, userProfile } = pending;
@@ -713,16 +639,10 @@ export async function executeTool(
             case 'facebook':
             case 'instagram': {
               if (!tempToken || !connectToken || !userProfile) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan datos para guardar la selección de Facebook. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan datos para guardar la selección de Facebook. El cliente debe intentar conectar de nuevo.',
+                }));
               }
 
               // === BUG 8.5 FIX: Re-fetch pages para validar selection_id ===
@@ -759,18 +679,12 @@ export async function executeTool(
               }
 
               await saveFacebookPage(profileId, validatedSelectionId, tempToken, userProfile, connectToken);
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  message: `Página de Facebook "${selection_name || selection_id}" conectada exitosamente.`,
-                  connected: true,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: true,
-                linkedInDataToCache: null,
-                connectionOptionsToCache: null,
-              };
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                message: `Página de Facebook "${selection_name || selection_id}" conectada exitosamente.`,
+                connected: true,
+              }), { shouldClearOAuthCookie: true });
             }
 
             case 'linkedin': {
@@ -781,16 +695,10 @@ export async function executeTool(
               } | null);
 
               if (!liData || !connectToken) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan datos de LinkedIn para guardar la selección. Asegúrate de incluir _linkedin_data que devolvió get_pending_connection. El cliente puede necesitar intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan datos de LinkedIn para guardar la selección. El cliente puede necesitar intentar conectar de nuevo.',
+                }));
               }
 
               const isPersonal = selection_id === 'personal';
@@ -807,152 +715,79 @@ export async function executeTool(
                 selectedOrg
               );
 
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  message: isPersonal
-                    ? `LinkedIn conectado como cuenta personal de ${liData.userProfile.displayName || 'usuario'}.`
-                    : `LinkedIn conectado como organización "${selectedOrg?.name || selection_id}".`,
-                  connected: true,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: true,
-                linkedInDataToCache: null,
-                connectionOptionsToCache: null,
-              };
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                message: isPersonal
+                  ? `LinkedIn conectado como cuenta personal de ${liData.userProfile.displayName || 'usuario'}.`
+                  : `LinkedIn conectado como organización "${selectedOrg?.name || selection_id}".`,
+                connected: true,
+              }), { shouldClearOAuthCookie: true });
             }
 
             case 'pinterest': {
               if (!tempToken || !connectToken || !userProfile) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan datos para guardar la selección de Pinterest. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan datos para guardar la selección de Pinterest. El cliente debe intentar conectar de nuevo.',
+                }));
               }
-              await savePinterestBoard(
-                profileId,
-                selection_id,
-                selection_name || selection_id,
-                tempToken,
-                userProfile,
-                connectToken
-              );
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  message: `Board de Pinterest "${selection_name || selection_id}" conectado exitosamente.`,
-                  connected: true,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: true,
-                linkedInDataToCache: null,
-                connectionOptionsToCache: null,
-              };
+              await savePinterestBoard(profileId, selection_id, selection_name || selection_id, tempToken, userProfile, connectToken);
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                message: `Board de Pinterest "${selection_name || selection_id}" conectado exitosamente.`,
+                connected: true,
+              }), { shouldClearOAuthCookie: true });
             }
 
             case 'googlebusiness': {
               if (!tempToken || !connectToken || !userProfile) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan datos para guardar la ubicación de Google Business. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan datos para guardar la ubicación de Google Business. El cliente debe intentar conectar de nuevo.',
+                }));
               }
-              await saveGoogleBusinessLocation(
-                profileId,
-                selection_id,
-                tempToken,
-                userProfile,
-                connectToken
-              );
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  message: `Ubicación de Google Business "${selection_name || selection_id}" conectada exitosamente.`,
-                  connected: true,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: true,
-                linkedInDataToCache: null,
-                connectionOptionsToCache: null,
-              };
+              await saveGoogleBusinessLocation(profileId, selection_id, tempToken, userProfile, connectToken);
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                message: `Ubicación de Google Business "${selection_name || selection_id}" conectada exitosamente.`,
+                connected: true,
+              }), { shouldClearOAuthCookie: true });
             }
 
             case 'snapchat': {
               if (!tempToken || !connectToken || !userProfile) {
-                return {
-                  result: JSON.stringify({
-                    success: false,
-                    error: 'Faltan datos para guardar el perfil de Snapchat. El cliente debe intentar conectar de nuevo.',
-                  }),
-                  publishPostCalled: false,
-                  shouldClearOAuthCookie: false,
-                  linkedInDataToCache: null,
-                  connectionOptionsToCache: null,
-                };
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'Faltan datos para guardar el perfil de Snapchat. El cliente debe intentar conectar de nuevo.',
+                }));
               }
-              await saveSnapchatProfile(
-                profileId,
-                selection_id,
-                tempToken,
-                userProfile,
-                connectToken
-              );
-              return {
-                result: JSON.stringify({
-                  success: true,
-                  platform,
-                  message: `Perfil público de Snapchat conectado exitosamente.`,
-                  connected: true,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: true,
-                linkedInDataToCache: null,
-                connectionOptionsToCache: null,
-              };
+              await saveSnapchatProfile(profileId, selection_id, tempToken, userProfile, connectToken);
+              return defaultResult(JSON.stringify({
+                success: true,
+                platform,
+                message: 'Perfil público de Snapchat conectado exitosamente.',
+                connected: true,
+              }), { shouldClearOAuthCookie: true });
             }
 
             default:
-              return {
-                result: JSON.stringify({
-                  success: false,
-                  error: `Plataforma no soportada para completar conexión: ${platform}`,
-                }),
-                publishPostCalled: false,
-                shouldClearOAuthCookie: false,
-                linkedInDataToCache: null,
-                connectionOptionsToCache: null,
-              };
+              return defaultResult(JSON.stringify({
+                success: false,
+                error: `Plataforma no soportada para completar conexión: ${platform}`,
+              }));
           }
         } catch (error) {
           console.error(`[Pioneer] Error completando conexión para ${platform}:`, error);
 
           if (error instanceof LateApiError && (error.status === 401 || error.status === 403)) {
-            return {
-              result: JSON.stringify({
-                success: false,
-                error: 'Los tokens de autorización expiraron. El cliente debe intentar conectar la plataforma de nuevo.',
-                expired: true,
-              }),
-              publishPostCalled: false,
-              shouldClearOAuthCookie: true,
-              linkedInDataToCache: null,
-              connectionOptionsToCache: null,
-            };
+            return defaultResult(JSON.stringify({
+              success: false,
+              error: 'Los tokens de autorización expiraron. El cliente debe intentar conectar la plataforma de nuevo.',
+              expired: true,
+            }), { shouldClearOAuthCookie: true });
           }
 
           throw error;
@@ -960,27 +795,15 @@ export async function executeTool(
       }
 
       default:
-        return {
-          result: JSON.stringify({
-            error: `Tool desconocida: ${toolName}`,
-          }),
-          publishPostCalled: false,
-          shouldClearOAuthCookie: false,
-          linkedInDataToCache: null,
-          connectionOptionsToCache: null,
-        };
+        return defaultResult(JSON.stringify({
+          error: `Tool desconocida: ${toolName}`,
+        }));
     }
   } catch (error) {
     console.error(`[Pioneer] Error ejecutando tool ${toolName}:`, error);
-    return {
-      result: JSON.stringify({
-        success: false,
-        error: `Error ejecutando ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
-      }),
-      publishPostCalled: false,
-      shouldClearOAuthCookie: false,
-      linkedInDataToCache: null,
-      connectionOptionsToCache: null,
-    };
+    return defaultResult(JSON.stringify({
+      success: false,
+      error: `Error ejecutando ${toolName}: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+    }));
   }
 }
