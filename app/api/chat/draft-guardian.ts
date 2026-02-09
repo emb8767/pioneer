@@ -173,13 +173,14 @@ export function validateEndTurn(
     return {
       allowed: false,
       forceMessage:
-        `SISTEMA: El cliente acaba de aprobar con "${lastUserMessage.trim()}". ` +
-        `Respondiste SOLO con texto sin ejecutar ninguna herramienta. Eso NO es suficiente. ` +
-        `Cuando el cliente aprueba, DEBES usar tools para ejecutar la acción correspondiente:\n` +
-        `- Si aprobó texto e imagen → llama create_draft\n` +
-        `- Si aprobó cuándo publicar → llama publish_post con el draft_id\n` +
-        `- Si aprobó el plan → comienza generando contenido con generate_content\n` +
-        `EJECUTA la herramienta correspondiente AHORA. No respondas solo con texto.`,
+        `SISTEMA — ACCIÓN OBLIGATORIA: El cliente dijo "${lastUserMessage.trim()}" aprobando la acción. ` +
+        `Respondiste SOLO con texto. Eso es INCORRECTO — debes ejecutar herramientas.\n\n` +
+        `INSTRUCCIONES EXACTAS — haz UNA de estas acciones AHORA:\n` +
+        `• Si el cliente aprobó el texto Y la imagen del post → llama create_draft con el contenido y las media_urls\n` +
+        `• Si el cliente indicó cuándo publicar (ahora, programado, según el plan) → llama create_draft PRIMERO (si no lo has hecho) y luego publish_post\n` +
+        `• Si el cliente aprobó el plan → llama generate_content para el primer post\n` +
+        `• Si el cliente pidió imagen → llama generate_image\n\n` +
+        `RESPONDE USANDO tool_use. NO respondas con texto solamente.`,
     };
   }
 

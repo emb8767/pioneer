@@ -63,9 +63,9 @@ export async function runConversationLoop(
   const finalTextParts: string[] = [];
   let lastUsage: Anthropic.Usage | null = null;
 
-  // Protección ④: limitar a 1 retry para evitar loop infinito
-  // Si Claude ignora el forzamiento, dejarlo terminar (mejor que un loop costoso)
-  let approvalForceRetryUsed = false;
+  // Protección ④: limitar a 2 retries para evitar loop infinito
+  // Si Claude ignora 2 forzamientos, dejarlo terminar (mejor que un loop costoso)
+  let approvalForceRetryCount = 0;
 
   const systemPrompt = buildSystemPrompt();
 
@@ -101,21 +101,30 @@ export async function runConversationLoop(
       const endVerdict = validateEndTurn(guardianState, lastUserMessage);
 
       if (!endVerdict.allowed && endVerdict.forceMessage) {
-        // Protección ④ tiene límite de 1 retry para evitar loop infinito
+        // Protección ④ tiene límite de 2 retries para evitar loop infinito
         const isProtection4 = !guardianState.draftCreated && !guardianState.anyToolExecutedInRequest;
 
-        if (isProtection4 && approvalForceRetryUsed) {
-          // Ya intentamos una vez — dejar que Claude termine
-          console.log(`[DraftGuardian] Protección ④ ya usó su retry — permitiendo end_turn`);
+        if (isProtection4 && approvalForceRetryCount >= 2) {
+          // Ya intentamos 2 veces — dejar que Claude termine
+          console.log(`[DraftGuardian] Protección ④ agotó ${approvalForceRetryCount} retries — permitiendo end_turn`);
           break;
         }
 
         if (isProtection4) {
-          approvalForceRetryUsed = true;
+          approvalForceRetryCount++;
+          // LIMPIAR texto alucinado: si Claude dijo "programado/guardado" sin tools,
+          // ese texto es mentira. Remover el texto de ESTA iteración.
+          if (textBlocks.length > 0) {
+            // Quitar los textos que acabamos de agregar en esta iteración
+            for (let t = 0; t < textBlocks.length; t++) {
+              finalTextParts.pop();
+            }
+            console.log(`[DraftGuardian] Texto alucinado removido (${textBlocks.length} bloques)`);
+          }
         }
 
         // NO dejar que termine — inyectar mensaje sistema para forzar continuación
-        console.log(`[DraftGuardian] Forzando continuación`);
+        console.log(`[DraftGuardian] Forzando continuación (retry ${approvalForceRetryCount}/2)`);
         currentMessages = [
           ...currentMessages,
           { role: 'assistant' as const, content: response.content },
