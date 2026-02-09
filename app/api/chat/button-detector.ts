@@ -31,10 +31,9 @@ export interface ButtonConfig {
 // === FUNCIÓN PRINCIPAL ===
 
 export function detectButtons(text: string): ButtonConfig[] | undefined {
-  // PRIORIDAD 1: Lista numerada con 2+ items
-  const numberedOptions = extractNumberedOptions(text);
-  if (numberedOptions.length >= 2) {
-    return buildOptionButtons(numberedOptions);
+  // PRIORIDAD 1: Aprobación de plan (antes de lista numerada, porque planes incluyen posts numerados)
+  if (/¿desea aprobar|¿aprueba (este|el) plan|¿le parece bien (este|el) plan/i.test(text)) {
+    return buildPlanApprovalButtons();
   }
 
   // PRIORIDAD 2: Pregunta de aprobación de texto
@@ -47,19 +46,20 @@ export function detectButtons(text: string): ButtonConfig[] | undefined {
     return buildImageOfferButtons();
   }
 
-  // PRIORIDAD 4: Aprobación de plan
-  if (/¿desea aprobar|¿aprueba (este|el) plan|¿le parece bien (este|el) plan/i.test(text)) {
-    return buildPlanApprovalButtons();
+  // PRIORIDAD 4: Lista numerada con 2+ items
+  const numberedOptions = extractNumberedOptions(text);
+  if (numberedOptions.length >= 2) {
+    return buildOptionButtons(numberedOptions);
   }
 
-  // PRIORIDAD 5: Siguiente post
-  if (/¿continuamos|¿seguimos|siguiente post|¿vamos con/i.test(text)) {
-    return buildNextPostButtons();
-  }
-
-  // PRIORIDAD 6: Preguntas de cantidad (10 o 15 preguntas)
-  if (/¿(vamos con|prefiere)\s+(las\s+)?\d+\s+(básicas|completas)|¿\d+\s+(básicas|completas)\s+o\s+\d+/i.test(text)) {
+  // PRIORIDAD 5: Preguntas de cantidad (10 o 15 preguntas)
+  if (/¿(vamos con|prefiere)\s+(las\s+)?\d+\s+(básicas|completas)|\d+\s+(básicas|completas)\s+o\s+\d+\s+(completas|básicas)/i.test(text)) {
     return buildQuestionCountButtons();
+  }
+
+  // PRIORIDAD 6: Siguiente post (después de preguntas para evitar falso positivo con "¿Vamos con las 10")
+  if (/¿continuamos|¿seguimos|siguiente post|¿vamos con (el|la) siguiente/i.test(text)) {
+    return buildNextPostButtons();
   }
 
   // PRIORIDAD 7: Pregunta sí/no genérica
