@@ -2,15 +2,17 @@
 //
 // RESPONSABILIDADES:
 // 1. Inyectar URLs de imagen si Claude no las incluyó en el texto (UX)
-// 2. Limpiar cookie OAuth si fue consumida
-// 3. Devolver NextResponse con JSON + headers
+// 2. Detectar botones de opción en el texto de Claude (Fase 1A)
+// 3. Limpiar cookie OAuth si fue consumida
+// 4. Devolver NextResponse con JSON + headers
 //
 // ESTILO PLC/LADDER: entrada = ConversationResult, salida = NextResponse
 
 import { NextResponse } from 'next/server';
 import { COOKIE_NAME } from '@/lib/oauth-cookie';
-import type { GuardianState } from './draft-guardian';
 import type { ConversationResult } from './conversation-loop';
+import { detectButtons } from './button-detector';
+import type { ButtonConfig } from './button-detector';
 
 export function buildResponse(result: ConversationResult): NextResponse {
   let fullText = result.finalText;
@@ -28,10 +30,22 @@ export function buildResponse(result: ConversationResult): NextResponse {
     }
   }
 
+  // === DETECTAR BOTONES EN TEXTO DE CLAUDE ===
+  let buttons: ButtonConfig[] | undefined;
+
+  // Fase 1A: Solo botones de opción (basados en texto)
+  // Fase 1B añadirá: botones de acción (basados en estado del guardian)
+  buttons = detectButtons(fullText);
+
+  if (buttons) {
+    console.log(`[Pioneer] Botones detectados: ${buttons.length} (${buttons.map(b => b.id).join(', ')})`);
+  }
+
   // === CONSTRUIR RESPUESTA JSON ===
   const jsonResponse = NextResponse.json({
     message: fullText,
     ...(result.lastUsage && { usage: result.lastUsage }),
+    ...(buttons && { buttons }),
   });
 
   // === LIMPIAR COOKIE OAUTH SI FUE CONSUMIDA ===

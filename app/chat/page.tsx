@@ -2,9 +2,23 @@
 
 import { useState, useRef, useEffect } from 'react';
 
+// === TIPOS ===
+
+interface ButtonConfig {
+  id: string;
+  label: string;
+  type: 'option' | 'action';
+  style: 'primary' | 'secondary' | 'ghost';
+  chatMessage?: string;
+  action?: string;
+  params?: Record<string, unknown>;
+}
+
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  buttons?: ButtonConfig[];
+  buttonsDisabled?: boolean;
 }
 
 // === RENDERIZAR CONTENIDO DEL MENSAJE ===
@@ -141,12 +155,58 @@ function MessageContent({ content }: { content: string }) {
   return <div className="whitespace-pre-wrap">{parts}</div>;
 }
 
+// === COMPONENTE DE BOTONES ===
+
+function ActionButtons({
+  buttons,
+  disabled,
+  onButtonClick,
+}: {
+  buttons: ButtonConfig[];
+  disabled: boolean;
+  onButtonClick: (button: ButtonConfig) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2 mt-3">
+      {buttons.map((button) => {
+        const baseStyles = 'px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border';
+
+        let styleClasses: string;
+        if (disabled) {
+          styleClasses = 'opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50';
+        } else if (button.style === 'primary') {
+          styleClasses = 'border-blue-500 text-blue-700 bg-white hover:bg-blue-50 cursor-pointer';
+        } else if (button.style === 'ghost') {
+          styleClasses = 'border-dashed border-gray-300 text-gray-500 bg-white hover:bg-gray-50 cursor-pointer';
+        } else {
+          // secondary
+          styleClasses = 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50 cursor-pointer';
+        }
+
+        return (
+          <button
+            key={button.id}
+            onClick={() => !disabled && onButtonClick(button)}
+            disabled={disabled}
+            className={`${baseStyles} ${styleClasses}`}
+          >
+            {button.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// === COMPONENTE PRINCIPAL ===
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pendingConnectionHandled, setPendingConnectionHandled] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-scroll al último mensaje
   useEffect(() => {
@@ -192,58 +252,20 @@ Necesito completar la conexión.`;
     }
   }, [pendingConnectionHandled]);
 
-  const sendAutoMessage = async (messageText: string) => {
-    if (isLoading) return;
-
+  // === ENVIAR MENSAJE (compartido por sendMessage, sendAutoMessage, y botones) ===
+  const sendChatMessage = async (messageText: string, currentMessages: Message[]) => {
     const userMessage: Message = { role: 'user', content: messageText };
-    setMessages(prev => {
-      const updated = [...prev, userMessage];
-      // Enviar con historial completo (excluyendo welcome message)
-      const messagesToSend = updated.slice(1);
-      
-      fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: messagesToSend }),
-      })
-        .then(response => {
-          if (!response.ok) throw new Error('Error en la respuesta del servidor');
-          return response.json();
-        })
-        .then(data => {
-          setMessages(prev2 => [...prev2, { role: 'assistant', content: data.message }]);
-        })
-        .catch(error => {
-          console.error('Error:', error);
-          setMessages(prev2 => [
-            ...prev2,
-            {
-              role: 'assistant',
-              content: 'Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.',
-            },
-          ]);
-        })
-        .finally(() => {
-          setIsLoading(false);
-        });
-
-      return updated;
-    });
-    setIsLoading(true);
-  };
-
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
-
-    const userMessage: Message = { role: 'user', content: input.trim() };
-    const newMessages = [...messages, userMessage];
+    const newMessages = [...currentMessages, userMessage];
     setMessages(newMessages);
-    setInput('');
     setIsLoading(true);
 
     try {
-      const messagesToSend = newMessages.slice(1);
-      
+      // Excluir welcome message del historial enviado al API
+      const messagesToSend = newMessages.slice(1).map(m => ({
+        role: m.role,
+        content: m.content,
+      }));
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -255,7 +277,15 @@ Necesito completar la conexión.`;
       }
 
       const data = await response.json();
-      setMessages([...newMessages, { role: 'assistant', content: data.message }]);
+
+      // Construir mensaje del assistant con botones si vienen
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: data.message,
+        ...(data.buttons && { buttons: data.buttons }),
+      };
+
+      setMessages([...newMessages, assistantMessage]);
     } catch (error) {
       console.error('Error:', error);
       setMessages([
@@ -269,6 +299,44 @@ Necesito completar la conexión.`;
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const sendAutoMessage = async (messageText: string) => {
+    if (isLoading) return;
+    await sendChatMessage(messageText, messages);
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || isLoading) return;
+    const text = input.trim();
+    setInput('');
+    await sendChatMessage(text, messages);
+  };
+
+  // === MANEJAR CLICK EN BOTÓN ===
+  const handleButtonClick = (button: ButtonConfig, messageIndex: number) => {
+    // 1. Deshabilitar TODOS los botones de este mensaje
+    setMessages(prev => prev.map((msg, idx) =>
+      idx === messageIndex ? { ...msg, buttonsDisabled: true } : msg
+    ));
+
+    if (button.type === 'option') {
+      if (button.chatMessage === '') {
+        // Botón "Otro" / "Cambios" → focus en el input de texto
+        inputRef.current?.focus();
+        return;
+      }
+      // Enviar como mensaje de chat normal
+      // Usar el estado actualizado (con botones deshabilitados)
+      setMessages(prev => {
+        const updatedMessages = prev.map((msg, idx) =>
+          idx === messageIndex ? { ...msg, buttonsDisabled: true } : msg
+        );
+        sendChatMessage(button.chatMessage!, updatedMessages);
+        return updatedMessages;
+      });
+    }
+    // type === 'action' se implementará en Fase 1B
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -290,19 +358,32 @@ Necesito completar la conexión.`;
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
           {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
+            <div key={index}>
               <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                  message.role === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-white border border-gray-200 text-gray-800'
-                }`}
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                <MessageContent content={message.content} />
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                    message.role === 'user'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white border border-gray-200 text-gray-800'
+                  }`}
+                >
+                  <MessageContent content={message.content} />
+                </div>
               </div>
+              {/* Botones debajo del mensaje del assistant */}
+              {message.role === 'assistant' && message.buttons && message.buttons.length > 0 && (
+                <div className="flex justify-start mt-1">
+                  <div className="max-w-[80%]">
+                    <ActionButtons
+                      buttons={message.buttons}
+                      disabled={!!message.buttonsDisabled || isLoading}
+                      onButtonClick={(button) => handleButtonClick(button, index)}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {isLoading && (
@@ -324,6 +405,7 @@ Necesito completar la conexión.`;
       <div className="border-t bg-white px-4 py-4">
         <div className="max-w-3xl mx-auto flex gap-3">
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyPress}
