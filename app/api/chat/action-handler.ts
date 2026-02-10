@@ -118,31 +118,16 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
       };
     }
 
-    // FIX: Validar que cada URL de imagen sea accesible antes de enviar al frontend.
-    // Late.dev CDN puede tardar unos segundos en propagar la imagen después del presign upload.
-    // Sin esta validación, el frontend muestra "URL puede haber expirado".
-    const validatedImages: string[] = [];
-    for (const url of allImages) {
-      const isAccessible = await waitForImageAccessible(url);
-      if (isAccessible) {
-        validatedImages.push(url);
-      } else {
-        console.warn(`[Pioneer Action] ⚠️ Imagen no accesible después de reintentos: ${url}`);
-        // Incluir de todas formas — el frontend tiene su propio retry
-        validatedImages.push(url);
-      }
-    }
-
     // FIX #1: Usar formato markdown explícito ![alt](url) para que el parser
     // de MessageContent siempre reconozca las URLs como imágenes,
     // sin depender del regex de bare URLs que puede fallar con paths inesperados.
-    const imageUrlsText = validatedImages
+    const imageUrlsText = allImages
       .map(url => `![Imagen generada](${url})`)
       .join('\n\n');
 
     return {
       success: true,
-      message: `🖼️ ${validatedImages.length > 1 ? `${validatedImages.length} imágenes generadas` : 'Imagen generada'}:\n\n${imageUrlsText}\n\n¿Le gusta?`,
+      message: `🖼️ ${allImages.length > 1 ? `${allImages.length} imágenes generadas` : 'Imagen generada'}:\n\n${imageUrlsText}\n\n¿Le gusta?`,
       buttons: [
         {
           id: 'approve_image',
@@ -169,7 +154,7 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
       // Pasar actionContext actualizado con las nuevas imageUrls
       actionContext: {
         content,
-        imageUrls: validatedImages,
+        imageUrls: allImages,
         platforms,
         imagePrompt,
         imageModel: model,
@@ -361,38 +346,4 @@ function formatScheduledTime(isoString: string): string {
   } catch {
     return isoString;
   }
-}
-
-// === HELPER: Validar que URL de imagen sea accesible ===
-// Late.dev CDN puede tardar en propagar después del presign upload.
-// Reintenta HEAD request hasta 3 veces con espera incremental.
-async function waitForImageAccessible(url: string, maxRetries = 3): Promise<boolean> {
-  const delays = [2000, 3000, 5000]; // 2s, 3s, 5s
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const response = await fetch(url, {
-        method: 'HEAD',
-        signal: AbortSignal.timeout(5000),
-      });
-
-      if (response.ok) {
-        if (attempt > 0) {
-          console.log(`[Pioneer Action] ✅ Imagen accesible después de ${attempt + 1} intentos: ${url.slice(-30)}`);
-        }
-        return true;
-      }
-
-      console.log(`[Pioneer Action] Imagen no accesible (HTTP ${response.status}), intento ${attempt + 1}/${maxRetries}`);
-    } catch (error) {
-      console.log(`[Pioneer Action] Imagen no accesible (${error instanceof Error ? error.message : 'timeout'}), intento ${attempt + 1}/${maxRetries}`);
-    }
-
-    // Esperar antes del siguiente intento
-    if (attempt < maxRetries - 1) {
-      await new Promise(resolve => setTimeout(resolve, delays[attempt]));
-    }
-  }
-
-  return false;
 }

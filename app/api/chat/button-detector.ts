@@ -85,11 +85,8 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   // ══════════════════════════════════════════════════
   // PRIORIDAD 6: Lista numerada (estrategias, opciones de Claude)
   // FIX #2: Excluir listas donde los items son PREGUNTAS (terminan en ?)
-  // FIX: Buscar opciones en TODO el texto, no solo en tail.
-  //   Las estrategias de Claude pueden ser largas (descripción bajo cada número)
-  //   y el tail de 1500 chars puede cortarlas.
   // ══════════════════════════════════════════════════
-  const numberedOptions = extractNumberedOptions(text);
+  const numberedOptions = extractNumberedOptions(tail);
   if (numberedOptions.length >= 2) {
     // FIX #2: Si la mayoría de items terminan en "?", son preguntas de seguimiento,
     // no opciones seleccionables. No generar botones.
