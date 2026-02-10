@@ -140,6 +140,35 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   }
 
   // ══════════════════════════════════════════════════
+  // PRIORIDAD 6b: Lista con guiones (- Item) — opciones en formato bullet
+  // Mismo filtro: excluir preguntas y resúmenes
+  // ══════════════════════════════════════════════════
+  const bulletOptions = extractBulletOptions(tail);
+  console.log(`[ButtonDetector] P6b CHECK: extractBulletOptions(tail) found ${bulletOptions.length} options`);
+
+  if (bulletOptions.length >= 2) {
+    const questionCount = bulletOptions.filter(opt =>
+      opt.fullText.trim().endsWith('?')
+    ).length;
+    const isQuestionList = questionCount > bulletOptions.length / 2;
+    const isSummaryList = /✅\s*(post|publicaci|completad|programad)/i.test(tail) ||
+      /resumen|progreso|completados|programados/i.test(tail.slice(-500));
+
+    console.log(`[ButtonDetector] P6b filters: questions=${questionCount}/${bulletOptions.length}, isQuestionList=${isQuestionList}, isSummary=${isSummaryList}`);
+
+    if (!isQuestionList && !isSummaryList) {
+      // Convertir a numbered format para reusar buildOptionButtons
+      const asNumbered = bulletOptions.map((opt, i) => ({
+        number: i + 1,
+        text: opt.text,
+        fullText: opt.fullText,
+      }));
+      console.log(`[ButtonDetector] P6b MATCH: building ${asNumbered.length} option buttons from bullet list`);
+      return buildOptionButtons(asNumbered);
+    }
+  }
+
+  // ══════════════════════════════════════════════════
   // PRIORIDAD 7-8: Flujo conversacional
   // ══════════════════════════════════════════════════
 
@@ -225,6 +254,36 @@ function extractNumberedOptions(text: string): Array<{ number: number; text: str
           text: optText,
           fullText,
         });
+      }
+    }
+  }
+
+  return options;
+}
+
+// === EXTRACTOR DE OPCIONES CON GUIONES ===
+// Detecta listas tipo "- Item" o "• Item"
+
+function extractBulletOptions(text: string): Array<{ text: string; fullText: string }> {
+  const options: Array<{ text: string; fullText: string }> = [];
+  const seen = new Set<string>();
+  const lines = text.split('\n');
+
+  for (const line of lines) {
+    const match = line.match(/^\s*[-•]\s+(?:\*\*)?(.+)/);
+    if (match) {
+      const fullText = match[1].trim();
+      // Extraer el texto principal (antes de paréntesis o explicación larga)
+      const optText = fullText
+        .replace(/\*\*/g, '')
+        .replace(/\s*\(.*\)\s*$/, '')  // Quitar paréntesis al final
+        .replace(/\s*[-–—:]\s*$/, '')  // Quitar guiones/dos puntos al final
+        .trim();
+      if (optText.length >= 2 && optText.length <= 60 && !seen.has(optText.toLowerCase())) {
+        // Skip catch-all options like "Alguna otra idea" — buildOptionButtons already adds [✏️ Otra idea]
+        if (/otra idea|algo más|otra opción|en mente/i.test(optText)) continue;
+        seen.add(optText.toLowerCase());
+        options.push({ text: optText, fullText });
       }
     }
   }
