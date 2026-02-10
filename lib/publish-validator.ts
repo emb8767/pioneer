@@ -10,7 +10,6 @@ import {
   listAccounts,
   createDraftPost,
   activateDraft,
-  getNextOptimalTime,
   PR_TIMEZONE,
   LateApiError,
 } from '@/lib/late-client';
@@ -56,12 +55,6 @@ export interface ValidationResult {
   corrections?: string[];
 }
 
-export interface ActivateValidationResult {
-  success: boolean;
-  data?: ValidatedActivateData;
-  error?: string;
-}
-
 // === HELPER: Validar que una URL de media es de origen confiable ===
 function isValidMediaOrigin(url: string): boolean {
   return (
@@ -80,21 +73,21 @@ export async function validateAndPrepareDraft(
     platforms: Array<{ platform: string; account_id: string }>;
     media_urls?: string[];
   },
-  generateImageWasCalled: boolean
+  hasValidImages: boolean
 ): Promise<ValidationResult> {
   const corrections: string[] = [];
 
-  // --- 0. Validar media_urls vs generate_image tracking ---
-  if (input.media_urls?.length && !generateImageWasCalled) {
+  // --- 0. Validar media_urls vs imagen generada ---
+  if (input.media_urls?.length && !hasValidImages) {
     const allFromValidOrigin = input.media_urls.every(url => isValidMediaOrigin(url));
     if (!allFromValidOrigin) {
       return {
         success: false,
-        error: 'ERROR: Se incluyeron media_urls con URLs no válidas. Las URLs de imágenes deben ser de replicate.delivery o media.getlate.dev (obtenidas via generate_image). Llama la tool generate_image PRIMERO para obtener una URL real.',
-        corrections: ['media_urls rechazadas: URLs no son de replicate.delivery ni media.getlate.dev y generate_image no fue llamada en esta sesión'],
+        error: 'ERROR: Se incluyeron media_urls con URLs no válidas. Las URLs de imágenes deben ser de replicate.delivery o media.getlate.dev (obtenidas via generación de imagen). Genera la imagen PRIMERO para obtener una URL real.',
+        corrections: ['media_urls rechazadas: URLs no son de replicate.delivery ni media.getlate.dev y no se generó imagen en esta sesión'],
       };
     }
-    corrections.push('media_urls de origen válido aceptadas de request anterior (generate_image no fue llamada en este request)');
+    corrections.push('media_urls de origen válido aceptadas de request anterior (imagen no fue generada en este request)');
   }
 
   // --- 1. Limpiar markdown del contenido ---
@@ -210,39 +203,6 @@ export async function validateAndPrepareDraft(
     data: draftData,
     corrections,
   };
-}
-
-// ============================================================
-// === VALIDACIÓN PARA ACTIVATE_DRAFT (publish_post) ===
-// ============================================================
-
-export function validateAndPrepareActivation(
-  input: {
-    publish_now?: boolean;
-    scheduled_for?: string;
-    timezone?: string;
-    use_queue?: boolean;
-    queue_profile_id?: string;
-  }
-): ActivateValidationResult {
-
-  const data: ValidatedActivateData = {};
-
-  if (input.use_queue) {
-    data.queuedFromProfile = input.queue_profile_id || '6984c371b984889d86a8b3d6';
-    // NO agregar publishNow ni scheduledFor — Late.dev asigna el slot
-  } else if (input.publish_now) {
-    data.publishNow = true;
-  } else if (input.scheduled_for) {
-    data.scheduledFor = input.scheduled_for;
-    data.timezone = input.timezone || PR_TIMEZONE;
-  } else {
-    // Sin instrucción específica → programar al próximo horario óptimo
-    data.scheduledFor = getNextOptimalTime();
-    data.timezone = PR_TIMEZONE;
-  }
-
-  return { success: true, data };
 }
 
 // ============================================================

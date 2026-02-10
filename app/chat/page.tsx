@@ -513,14 +513,3 @@ function getPlatformDisplayName(platform: string): string {
   };
   return names[platform] || platform;
 }
-
-// Extraer URLs de imagen del texto (para actualizar actionContext después de regenerate)
-function extractImageUrls(text: string): string[] {
-  const urls: string[] = [];
-  const regex = /https:\/\/media\.getlate\.dev\/[^\s)]+/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    urls.push(match[0]);
-  }
-  return urls;
-}

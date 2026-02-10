@@ -13,7 +13,6 @@ import {
   getConnectUrl,
   PR_TIMEZONE,
   LateApiError,
-  deletePost,
   // Headless OAuth functions
   isHeadlessPlatform,
   getFacebookPages,
