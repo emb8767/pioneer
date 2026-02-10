@@ -1,12 +1,13 @@
 // action-handler.ts — Ejecuta acciones de botones directamente (sin Claude API)
 //
 // RESPONSABILIDADES:
-// 1. approve_and_publish: create_draft + activate en cadena → publicado
-// 2. publish_no_image: create_draft sin media + activate → publicado
-// 3. regenerate_image: genera nueva imagen con Replicate → retorna URL
+// 1. generate_image: genera imagen con Replicate desde imageSpec → retorna URL
+// 2. approve_and_publish: create_draft + activate en cadena → publicado
+// 3. publish_no_image: create_draft sin media + activate → publicado
+// 4. regenerate_image: genera nueva imagen con mismo spec → retorna URL
 //
-// PRINCIPIO: Reutiliza funciones de publish-validator.ts y replicate-client.ts
-// CERO código nuevo de Late.dev — todo ya existe.
+// PRINCIPIO: Claude DISEÑA (describe_image). El CLIENTE EJECUTA (generate_image, publish).
+// Reutiliza funciones existentes de publish-validator.ts y replicate-client.ts.
 
 import {
   validateAndPrepareDraft,
@@ -27,7 +28,11 @@ export interface ActionRequest {
     platforms?: Array<{ platform: string; accountId: string }>;
     scheduledFor?: string;
     publishNow?: boolean;
+    // Image spec (from describe_image tool)
     imagePrompt?: string;
+    imageModel?: string;
+    imageAspectRatio?: string;
+    imageCount?: number;
   };
 }
 
@@ -35,6 +40,7 @@ export interface ActionResponse {
   success: boolean;
   message: string;
   buttons?: ButtonConfig[];
+  actionContext?: Record<string, unknown>;
   error?: string;
 }
 
@@ -44,6 +50,9 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
   console.log(`[Pioneer Action] Ejecutando: ${req.action}`);
 
   switch (req.action) {
+    case 'generate_image':
+      return handleGenerateImage(req.params);
+
     case 'approve_and_publish':
       return handleApproveAndPublish(req.params);
 
@@ -51,7 +60,7 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
       return handleApproveAndPublish({ ...req.params, imageUrls: [] });
 
     case 'regenerate_image':
-      return handleRegenerateImage(req.params);
+      return handleGenerateImage(req.params);
 
     default:
       return {
@@ -59,6 +68,101 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
         message: `Acción no reconocida: ${req.action}`,
         error: `unknown_action: ${req.action}`,
       };
+  }
+}
+
+// === GENERATE IMAGE (nueva acción principal — antes era tool de Claude) ===
+// Flujo: Replicate genera → valida URL → sube a Late.dev → URL permanente
+
+async function handleGenerateImage(params: ActionRequest['params']): Promise<ActionResponse> {
+  const { imagePrompt, imageModel, imageAspectRatio, imageCount, content, platforms } = params;
+
+  if (!imagePrompt) {
+    return { success: false, message: 'Error: no hay prompt de imagen.', error: 'missing_prompt' };
+  }
+
+  const model = (imageModel as 'schnell' | 'pro') || 'schnell';
+  const aspect_ratio = (imageAspectRatio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1';
+  const count = imageCount || 1;
+
+  try {
+    // Para carruseles (count > 1), generar secuencialmente con delay (Replicate free plan)
+    const allImages: string[] = [];
+    const errors: string[] = [];
+
+    for (let i = 0; i < count; i++) {
+      if (i > 0) {
+        console.log(`[Pioneer Action] Esperando 10s antes de generar imagen ${i + 1}/${count}...`);
+        await new Promise(resolve => setTimeout(resolve, 10_000));
+      }
+
+      const result = await generateImage({
+        prompt: imagePrompt,
+        model,
+        aspect_ratio,
+        num_outputs: 1,
+      });
+
+      if (result.success && result.images && result.images.length > 0) {
+        allImages.push(...result.images);
+      } else {
+        errors.push(`Imagen ${i + 1}: ${result.error || 'Error desconocido'}`);
+      }
+    }
+
+    if (allImages.length === 0) {
+      return {
+        success: false,
+        message: `Error generando imagen: ${errors[0] || 'Sin resultado'}`,
+        error: 'image_error',
+      };
+    }
+
+    const imageUrlsText = allImages.map(url => `${url}`).join('\n\n');
+
+    return {
+      success: true,
+      message: `🖼️ ${allImages.length > 1 ? `${allImages.length} imágenes generadas` : 'Imagen generada'}:\n\n${imageUrlsText}\n\n¿Le gusta?`,
+      buttons: [
+        {
+          id: 'approve_image',
+          label: '👍 Aprobar y programar',
+          type: 'action',
+          style: 'primary',
+          action: 'approve_and_publish',
+        },
+        {
+          id: 'regenerate',
+          label: '🔄 Otra imagen',
+          type: 'action',
+          style: 'secondary',
+          action: 'regenerate_image',
+        },
+        {
+          id: 'skip_image',
+          label: '⭕ Sin imagen',
+          type: 'action',
+          style: 'ghost',
+          action: 'publish_no_image',
+        },
+      ],
+      // Pasar actionContext actualizado con las nuevas imageUrls
+      actionContext: {
+        content,
+        imageUrls: allImages,
+        platforms,
+        imagePrompt,
+        imageModel: model,
+        imageAspectRatio: aspect_ratio,
+        imageCount: count,
+      },
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error generando imagen: ${err instanceof Error ? err.message : 'Error desconocido'}`,
+      error: 'image_error',
+    };
   }
 }
 
@@ -74,7 +178,6 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
   }
 
   // --- Resolver plataformas ---
-  // Si el frontend no envía platforms, buscar automáticamente
   let resolvedPlatforms: Array<{ platform: string; account_id: string }>;
 
   if (platforms && platforms.length > 0) {
@@ -83,7 +186,6 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
       account_id: p.accountId,
     }));
   } else {
-    // Auto-detectar: usar todas las cuentas conectadas
     try {
       const accountsResult = await listAccounts();
       if (accountsResult.accounts.length === 0) {
@@ -157,7 +259,6 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     activateData.scheduledFor = scheduledFor;
     activateData.timezone = PR_TIMEZONE;
   } else {
-    // Sin fecha específica → próximo horario óptimo
     activateData.scheduledFor = getNextOptimalTime();
     activateData.timezone = PR_TIMEZONE;
   }
@@ -181,75 +282,10 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
       ? `Error de Late.dev (HTTP ${err.status}): ${err.body}`
       : err instanceof Error ? err.message : 'Error desconocido';
 
-    // El draft fue creado pero no se activó — informar con opción de reintentar
     return {
       success: false,
       message: `El borrador se creó pero no se pudo publicar: ${msg}. Puede intentar de nuevo.`,
       error: 'activate_error',
-    };
-  }
-}
-
-// === REGENERATE IMAGE ===
-
-async function handleRegenerateImage(params: ActionRequest['params']): Promise<ActionResponse> {
-  const { imagePrompt } = params;
-
-  if (!imagePrompt) {
-    return { success: false, message: 'Error: no hay prompt de imagen.', error: 'missing_prompt' };
-  }
-
-  try {
-    const result = await generateImage({
-      prompt: imagePrompt,
-      model: 'schnell',
-      aspect_ratio: '1:1',
-      num_outputs: 1,
-    });
-
-    if (!result.success || !result.images || result.images.length === 0) {
-      return {
-        success: false,
-        message: `Error generando imagen: ${result.error || 'Sin resultado'}`,
-        error: 'image_error',
-      };
-    }
-
-    const imageUrl = result.images[0];
-
-    return {
-      success: true,
-      message: `🖼️ Nueva imagen generada:\n\n${imageUrl}\n\n¿Le gusta esta imagen?`,
-      // Retornar botones de aprobación de imagen (type: action para publicar directo)
-      buttons: [
-        {
-          id: 'approve_image',
-          label: '👍 Aprobar y programar',
-          type: 'action',
-          style: 'primary',
-          action: 'approve_and_publish',
-        },
-        {
-          id: 'regenerate',
-          label: '🔄 Otra imagen',
-          type: 'action',
-          style: 'secondary',
-          action: 'regenerate_image',
-        },
-        {
-          id: 'skip_image',
-          label: '⭕ Sin imagen',
-          type: 'action',
-          style: 'ghost',
-          action: 'publish_no_image',
-        },
-      ],
-    };
-  } catch (err) {
-    return {
-      success: false,
-      message: `Error generando imagen: ${err instanceof Error ? err.message : 'Error desconocido'}`,
-      error: 'image_error',
     };
   }
 }

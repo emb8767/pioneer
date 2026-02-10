@@ -1,13 +1,13 @@
 // response-builder.ts — Construye la respuesta HTTP final
 //
 // RESPONSABILIDADES:
-// 1. Inyectar URLs de imagen si Claude no las incluyó en el texto (UX)
-// 2. Detectar botones en texto de Claude + estado del guardian (Fase 1A + 1B)
-// 3. Incluir actionContext cuando hay botones de acción (Fase 1B)
-// 4. Limpiar cookie OAuth si fue consumida
-// 5. Devolver NextResponse con JSON + headers
+// 1. Detectar botones en texto de Claude + estado del guardian (describe_image)
+// 2. Incluir actionContext cuando hay botones de acción
+// 3. Limpiar cookie OAuth si fue consumida
+// 4. Devolver NextResponse con JSON + headers
 //
-// ESTILO PLC/LADDER: entrada = ConversationResult, salida = NextResponse
+// Fase 3: Sin inyección de image URLs — Claude ya no genera imágenes.
+// Las imágenes se generan cuando el cliente clickea [🎨 Generar imagen].
 
 import { NextResponse } from 'next/server';
 import { COOKIE_NAME } from '@/lib/oauth-cookie';
@@ -17,32 +17,22 @@ import type { ButtonConfig, DetectorState } from './button-detector';
 
 // ActionContext — datos que el frontend necesita para ejecutar botones de acción
 interface ActionContext {
-  content?: string;           // Texto del post (para create_draft)
-  imageUrls?: string[];       // URLs permanentes de media.getlate.dev
-  imagePrompt?: string;       // Prompt para regenerar imagen
+  content?: string;           // Texto del post
+  imagePrompt?: string;       // Prompt para generar imagen
+  imageModel?: string;        // Modelo (schnell/pro)
+  imageAspectRatio?: string;  // Aspect ratio
+  imageCount?: number;        // Cantidad de imágenes
   platforms?: Array<{ platform: string; accountId: string }>;
 }
 
 export function buildResponse(result: ConversationResult): NextResponse {
-  let fullText = result.finalText;
+  const fullText = result.finalText;
   const state = result.guardianState;
-
-  // === INYECCIÓN DE URL DE IMAGEN (para UX del chat) ===
-  // Si generate_image fue llamada y la URL NO aparece en el texto,
-  // inyectarla para que el chat UI la renderice como imagen visible.
-  if (state.generateImageWasCalled && state.lastGeneratedImageUrls.length > 0) {
-    const hasImageUrl = state.lastGeneratedImageUrls.some(url => fullText.includes(url));
-    if (!hasImageUrl) {
-      console.log(`[Pioneer] Inyectando ${state.lastGeneratedImageUrls.length} URL(s) de imagen en respuesta`);
-      const urlBlock = state.lastGeneratedImageUrls.join('\n\n');
-      fullText = fullText + '\n\n' + urlBlock;
-    }
-  }
 
   // === DETECTAR BOTONES ===
   const detectorState: DetectorState = {
-    generateImageWasCalled: state.generateImageWasCalled,
-    lastGeneratedImageUrls: state.lastGeneratedImageUrls,
+    describeImageWasCalled: state.describeImageWasCalled,
+    hasImageSpec: !!state.lastImageSpec,
   };
 
   const buttons: ButtonConfig[] | undefined = detectButtons(fullText, detectorState);
@@ -57,19 +47,17 @@ export function buildResponse(result: ConversationResult): NextResponse {
   if (buttons?.some(b => b.type === 'action')) {
     actionContext = {};
 
-    // Contenido del post (del último generate_content)
+    // Contenido del post
     if (state.lastGeneratedContent) {
       actionContext.content = state.lastGeneratedContent;
     }
 
-    // URLs de imagen
-    if (state.lastGeneratedImageUrls.length > 0) {
-      actionContext.imageUrls = state.lastGeneratedImageUrls;
-    }
-
-    // Prompt de imagen (para regenerate)
-    if (state.lastImagePrompt) {
-      actionContext.imagePrompt = state.lastImagePrompt;
+    // Image spec (from describe_image)
+    if (state.lastImageSpec) {
+      actionContext.imagePrompt = state.lastImageSpec.prompt;
+      actionContext.imageModel = state.lastImageSpec.model;
+      actionContext.imageAspectRatio = state.lastImageSpec.aspect_ratio;
+      actionContext.imageCount = state.lastImageSpec.count;
     }
 
     // Plataformas conectadas
@@ -77,7 +65,7 @@ export function buildResponse(result: ConversationResult): NextResponse {
       actionContext.platforms = state.connectedPlatforms;
     }
 
-    console.log(`[Pioneer] ActionContext incluido: content=${!!actionContext.content}, images=${actionContext.imageUrls?.length || 0}, platforms=${actionContext.platforms?.length || 0}`);
+    console.log(`[Pioneer] ActionContext incluido: content=${!!actionContext.content}, imageSpec=${!!state.lastImageSpec}, platforms=${actionContext.platforms?.length || 0}`);
   }
 
   // === CONSTRUIR RESPUESTA JSON ===

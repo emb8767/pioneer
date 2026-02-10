@@ -18,6 +18,9 @@ interface ActionContext {
   content?: string;
   imageUrls?: string[];
   imagePrompt?: string;
+  imageModel?: string;
+  imageAspectRatio?: string;
+  imageCount?: number;
   platforms?: Array<{ platform: string; accountId: string }>;
 }
 
@@ -351,15 +354,10 @@ Necesito completar la conexión.`;
         role: 'assistant',
         content: data.message,
         ...(data.buttons && { buttons: data.buttons }),
-        // Si regenerate devuelve nuevas imageUrls, pasar como actionContext
-        ...(data.buttons?.some((b: ButtonConfig) => b.type === 'action') && actionContext && {
-          actionContext: {
-            ...actionContext,
-            // Si hay nueva imagen en el mensaje, actualizar imageUrls
-            ...(data.message.includes('media.getlate.dev') && {
-              imageUrls: extractImageUrls(data.message),
-            }),
-          },
+        // Si action-handler devuelve actionContext (ej: generate_image con nuevas URLs),
+        // usar ese. Si no, propagar el actionContext original.
+        ...(data.buttons?.some((b: ButtonConfig) => b.type === 'action') && {
+          actionContext: data.actionContext || actionContext,
         }),
       };
 

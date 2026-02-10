@@ -1,9 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 // === TOOLS DISPONIBLES PARA CLAUDE (7 tools) ===
-// Fase 2: Removidos create_draft y publish_post — ahora ejecutados por action buttons
-// Claude solo razona, genera contenido/imágenes, y conecta cuentas.
-// La publicación la maneja el frontend via /api/chat/action.
+// Fase 3: generate_image reemplazado por describe_image
+// Claude DISEÑA todo (texto, imagen spec). El CLIENTE ejecuta acciones (generar imagen, publicar).
+// Acciones del cliente van via /api/chat/action (sin pasar por Claude).
 export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'list_connected_accounts',
@@ -115,9 +115,9 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
-    name: 'generate_image',
+    name: 'describe_image',
     description:
-      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Las imágenes se suben automáticamente a Late.dev y devuelve URLs permanentes (https://media.getlate.dev/...). Las URLs permanentes NO expiran. DESPUÉS de generar, muestra la imagen al cliente y espera su aprobación — el sistema se encarga de publicar.',
+      'Describe la imagen que se debe generar para acompañar un post. TÚ NO generas la imagen — solo describes qué imagen crear. El sistema mostrará un botón al cliente para que ejecute la generación. El prompt DEBE ser en inglés. Después de llamar esta tool, presenta la descripción al cliente y ESPERA — el sistema muestra botones automáticamente.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -141,7 +141,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
         count: {
           type: 'number',
           description:
-            'Cantidad de imágenes a generar (1-10). Usar > 1 para carruseles. Cada imagen cuesta $0.015 (schnell). Default: 1.',
+            'Cantidad de imágenes (1-10). Usar > 1 para carruseles. Cada imagen cuesta $0.015 (schnell). Default: 1.',
         },
       },
       required: ['prompt'],

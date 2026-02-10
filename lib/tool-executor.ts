@@ -1,11 +1,12 @@
-// Ejecutor de tools para Pioneer Agent — Fase 2
+// Ejecutor de tools para Pioneer Agent — Fase 3
 // Llamadas directas a APIs (sin fetch HTTP — regla Vercel serverless)
 //
 // === TOOLS ACTIVAS (7) ===
 // list_connected_accounts, generate_connect_url, generate_content,
-// generate_image, get_pending_connection, complete_connection, setup_queue
+// describe_image, get_pending_connection, complete_connection, setup_queue
 //
-// create_draft y publish_post removidos — ahora en action-handler.ts (botones de acción)
+// generate_image, create_draft, publish_post → movidos a action-handler.ts (botones de acción)
+// Claude solo DISEÑA. El cliente EJECUTA.
 
 import {
   listAccounts,
@@ -29,9 +30,6 @@ import {
   getQueueNextSlot,
 } from '@/lib/late-client';
 import { generateContent } from '@/lib/content-generator';
-import { generateImage } from '@/lib/replicate-client';
-// Fase 2: validateAndPrepareDraft, createDraftWithRetry, activateDraftWithRetry
-// ahora solo se usan en action-handler.ts (botones de acción)
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform } from '@/lib/types';
 
@@ -54,16 +52,11 @@ function defaultResult(result: string, overrides?: Partial<ToolResult>): ToolRes
   };
 }
 
-// === DELAY HELPER ===
-const CAROUSEL_IMAGE_DELAY_MS = 10_000; // 10s entre imágenes — Replicate free plan
-
 // === EJECUTAR TOOLS ===
 
 export async function executeTool(
   toolName: string,
   toolInput: Record<string, unknown>,
-  generateImageWasCalled: boolean,
-  lastGeneratedImageUrls: string[],
   // OAuth headless context
   pendingOAuthData: OAuthPendingData | null,
   linkedInCachedData: Record<string, unknown> | null,
@@ -125,7 +118,9 @@ export async function executeTool(
         return defaultResult(JSON.stringify(result));
       }
 
-      case 'generate_image': {
+      case 'describe_image': {
+        // Fase 3: Claude NO genera la imagen — solo describe qué generar.
+        // Retorna la spec como JSON. El sistema muestra botones para que el cliente ejecute.
         const input = toolInput as {
           prompt: string;
           model?: string;
@@ -133,96 +128,23 @@ export async function executeTool(
           count?: number;
         };
 
-        const imageCount = input.count && input.count > 1 ? Math.min(input.count, 10) : 0;
-
-        // === CARRUSEL / MULTI-IMAGEN ===
-        if (imageCount > 1) {
-          const allImages: string[] = [];
-          let totalCostReal = 0;
-          let totalCostClient = 0;
-          let anyRegenerated = false;
-          const errors: string[] = [];
-
-          for (let i = 0; i < imageCount; i++) {
-            if (i > 0) {
-              console.log(`[Pioneer] Esperando ${CAROUSEL_IMAGE_DELAY_MS / 1000}s antes de generar imagen ${i + 1}/${imageCount}...`);
-              await new Promise(resolve => setTimeout(resolve, CAROUSEL_IMAGE_DELAY_MS));
-            }
-
-            try {
-              const imgResult = await generateImage({
-                prompt: input.prompt,
-                model: (input.model as 'schnell' | 'pro') || 'schnell',
-                aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
-                num_outputs: 1,
-              });
-
-              if (imgResult.success && imgResult.images && imgResult.images.length > 0) {
-                allImages.push(...imgResult.images);
-                totalCostReal += imgResult.cost_real || 0;
-                totalCostClient += imgResult.cost_client || 0;
-                if (imgResult.regenerated) anyRegenerated = true;
-              } else {
-                errors.push(`Imagen ${i + 1}: ${imgResult.error || 'Error desconocido'}`);
-              }
-            } catch (imgError) {
-              errors.push(`Imagen ${i + 1}: ${imgError instanceof Error ? imgError.message : 'Error desconocido'}`);
-            }
-          }
-
-          const allUploadedToLate = allImages.length > 0 && allImages.every(url => url.includes('media.getlate.dev'));
-          const someUploadedToLate = allImages.some(url => url.includes('media.getlate.dev'));
-
-          const resultObj: Record<string, unknown> = {
-            success: allImages.length > 0,
-            images: allImages,
-            model: input.model || 'schnell',
-            cost_real: totalCostReal,
-            cost_client: totalCostClient,
-            expires_in: allUploadedToLate
-              ? 'Permanente (almacenadas en Late.dev)'
-              : someUploadedToLate
-                ? 'Mixto: algunas permanentes, algunas expiran en 1 hora'
-                : '1 hora para URLs temporales (publicar pronto)',
-            uploaded_to_late: allUploadedToLate,
-            total_requested: imageCount,
-            total_generated: allImages.length,
-            ...(errors.length > 0 && { errors }),
-          };
-
-          if (allImages.length < imageCount && allImages.length > 0) {
-            resultObj._note_for_pioneer = `Solo se generaron ${allImages.length} de ${imageCount} imágenes solicitadas. Costo total: $${totalCostClient.toFixed(3)}. Informa al cliente.`;
-          }
-          if (anyRegenerated) {
-            resultObj._note_for_pioneer = `Algunas imágenes necesitaron regeneración. Costo total: $${totalCostClient.toFixed(3)} (${imageCount} imágenes). Informa al cliente del costo actualizado.`;
-          }
-          if (errors.length > 0 && allImages.length === 0) {
-            resultObj.error = errors[0];
-          }
-
-          return defaultResult(JSON.stringify(resultObj));
-        }
-
-        // Imagen individual
-        const result = await generateImage({
+        const spec = {
           prompt: input.prompt,
-          model: (input.model as 'schnell' | 'pro') || 'schnell',
-          aspect_ratio: (input.aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1',
-          num_outputs: 1,
-        });
+          model: input.model || 'schnell',
+          aspect_ratio: input.aspect_ratio || '1:1',
+          count: input.count || 1,
+        };
 
-        const resultObj: Record<string, unknown> = { ...result };
-        if (result.regenerated && result.success) {
-          resultObj._note_for_pioneer = `IMPORTANTE: La primera imagen generada no fue accesible y se regeneró automáticamente. El costo total de imagen fue $${result.cost_client.toFixed(3)} (${result.attempts} intentos). Informa al cliente de este costo actualizado.`;
-        }
+        const costPerImage = spec.model === 'pro' ? 0.275 : 0.015;
+        const totalCost = costPerImage * spec.count;
 
-        return defaultResult(JSON.stringify(resultObj));
+        return defaultResult(JSON.stringify({
+          success: true,
+          image_spec: spec,
+          estimated_cost: `$${totalCost.toFixed(3)}`,
+          _note_for_pioneer: `Imagen descrita exitosamente. Presenta la descripción al cliente. El sistema mostrará botones [🎨 Generar imagen] [⭕ Sin imagen] automáticamente. NO intentes generar la imagen tú mismo.`,
+        }));
       }
-
-      // ============================================================
-      // === DRAFT-FIRST: create_draft y publish_post REMOVIDOS (Fase 2)
-      // === Ahora ejecutados por action buttons via /api/chat/action
-      // ============================================================
 
       // === TOOL: Queue ===
 
@@ -324,37 +246,49 @@ export async function executeTool(
               if (!pendingDataToken) {
                 return defaultResult(JSON.stringify({
                   success: false,
-                  error: 'Falta pendingDataToken para LinkedIn. El cliente debe intentar conectar de nuevo.',
+                  error: 'Faltan datos pendientes para LinkedIn. El cliente debe intentar conectar de nuevo.',
                 }));
               }
-              const liResult = await getLinkedInPendingData(pendingDataToken);
-              const liOptions: Array<{ id: string; name: string }> = [
-                { id: 'personal', name: `Cuenta personal de ${liResult.userProfile.displayName}` },
-              ];
-              if (liResult.organizations) {
-                for (const org of liResult.organizations) {
-                  liOptions.push({ id: org.id, name: org.name });
+
+              const liData = await getLinkedInPendingData(pendingDataToken);
+
+              const options: Array<{ id: string; name: string; type: string }> = [];
+
+              if (liData.userProfile?.displayName) {
+                options.push({
+                  id: 'personal',
+                  name: `${liData.userProfile.displayName} (Personal)`,
+                  type: 'personal',
+                });
+              }
+
+              if (liData.organizations?.length) {
+                for (const org of liData.organizations) {
+                  options.push({
+                    id: org.id,
+                    name: org.name,
+                    type: 'organization',
+                  });
                 }
               }
+
+              if (options.length === 0) {
+                return defaultResult(JSON.stringify({
+                  success: false,
+                  error: 'No se encontraron perfiles ni organizaciones de LinkedIn.',
+                }));
+              }
+
               return defaultResult(JSON.stringify({
                 success: true,
                 platform,
                 step,
-                options_type: 'accounts',
-                options: liOptions,
-                message: `Se encontraron ${liOptions.length} opción(es) de LinkedIn. Muestre las opciones al cliente para que elija una.`,
-                _linkedin_data: {
-                  tempToken: liResult.tempToken,
-                  userProfile: liResult.userProfile,
-                  organizations: liResult.organizations || [],
-                },
+                options_type: 'profiles',
+                options,
+                message: `Se encontraron ${options.length} opción(es) de LinkedIn. Muestre las opciones al cliente.`,
               }), {
-                linkedInDataToCache: {
-                  tempToken: liResult.tempToken,
-                  userProfile: liResult.userProfile,
-                  organizations: liResult.organizations || [],
-                },
-                connectionOptionsToCache: liOptions,
+                linkedInDataToCache: liData as unknown as Record<string, unknown>,
+                connectionOptionsToCache: options,
               });
             }
 
@@ -362,24 +296,23 @@ export async function executeTool(
               if (!tempToken || !connectToken) {
                 return defaultResult(JSON.stringify({
                   success: false,
-                  error: 'Faltan tokens para obtener boards de Pinterest. El cliente debe intentar conectar de nuevo.',
+                  error: 'Faltan tokens para obtener boards de Pinterest.',
                 }));
               }
-              const pinResult = await getPinterestBoards(profileId, tempToken, connectToken);
-              const pinOptions = pinResult.boards.map(b => ({
+              const boards = await getPinterestBoards(profileId, tempToken, connectToken);
+              const boardOptions = boards.boards.map(b => ({
                 id: b.id,
                 name: b.name,
-                description: b.description || '',
               }));
               return defaultResult(JSON.stringify({
                 success: true,
                 platform,
                 step,
                 options_type: 'boards',
-                options: pinOptions,
-                message: `Se encontraron ${pinResult.boards.length} board(s) de Pinterest. Muestre las opciones al cliente.`,
+                options: boardOptions,
+                message: `Se encontraron ${boardOptions.length} board(s) de Pinterest. Muestre las opciones al cliente.`,
               }), {
-                connectionOptionsToCache: pinOptions,
+                connectionOptionsToCache: boardOptions,
               });
             }
 
@@ -387,43 +320,36 @@ export async function executeTool(
               if (!tempToken || !connectToken) {
                 return defaultResult(JSON.stringify({
                   success: false,
-                  error: 'Faltan tokens para obtener ubicaciones de Google Business. El cliente debe intentar conectar de nuevo.',
+                  error: 'Faltan tokens para obtener ubicaciones de Google Business.',
                 }));
               }
-              const gbResult = await getGoogleBusinessLocations(profileId, tempToken, connectToken);
-              const gbOptions = gbResult.locations.map(l => ({
+              const locations = await getGoogleBusinessLocations(profileId, tempToken, connectToken);
+              const locationOptions = locations.locations.map(l => ({
                 id: l.id,
                 name: l.name,
-                address: l.address || '',
               }));
               return defaultResult(JSON.stringify({
                 success: true,
                 platform,
                 step,
                 options_type: 'locations',
-                options: gbOptions,
-                message: `Se encontraron ${gbResult.locations.length} ubicación(es) de Google Business. Muestre las opciones al cliente.`,
+                options: locationOptions,
+                message: `Se encontraron ${locationOptions.length} ubicación(es) de Google Business. Muestre las opciones al cliente.`,
               }), {
-                connectionOptionsToCache: gbOptions,
+                connectionOptionsToCache: locationOptions,
               });
             }
 
             case 'snapchat': {
-              if (!tempToken || !connectToken) {
-                return defaultResult(JSON.stringify({
-                  success: false,
-                  error: 'Faltan tokens para Snapchat. El cliente debe intentar conectar de nuevo.',
-                }));
-              }
               return defaultResult(JSON.stringify({
                 success: true,
                 platform,
                 step,
-                options_type: 'profiles',
-                options: [{ id: 'public_profile', name: 'Perfil público de Snapchat' }],
-                message: 'Snapchat requiere seleccionar el perfil público para completar la conexión.',
+                options_type: 'confirm',
+                options: [{ id: 'default', name: 'Perfil público de Snapchat' }],
+                message: 'Snapchat solo tiene una opción: el perfil público. Confirme con el cliente.',
               }), {
-                connectionOptionsToCache: [{ id: 'public_profile', name: 'Perfil público de Snapchat' }],
+                connectionOptionsToCache: [{ id: 'default', name: 'Perfil público de Snapchat' }],
               });
             }
 
@@ -434,7 +360,7 @@ export async function executeTool(
               }));
           }
         } catch (error) {
-          console.error(`[Pioneer] Error obteniendo opciones para ${platform}:`, error);
+          console.error(`[Pioneer] Error en get_pending_connection para ${platform}:`, error);
 
           if (error instanceof LateApiError && (error.status === 401 || error.status === 403)) {
             return defaultResult(JSON.stringify({

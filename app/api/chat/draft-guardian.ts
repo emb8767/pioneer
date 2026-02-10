@@ -1,9 +1,9 @@
-// draft-guardian.ts — Fase 2: Simplificado
+// draft-guardian.ts — Fase 3: Simplificado
 //
-// Con create_draft y publish_post removidos de Claude, las protecciones ①②③ ya no aplican.
+// Con generate_image movido a action buttons, ya no hay image tracking en el loop.
 // Lo que queda:
 // - Protección ④: Si el cliente aprueba y Claude no usa NINGUNA tool → forzar generate_content
-// - Tracking de estado: image URLs, content text, platforms → para actionContext de botones
+// - Tracking de estado: content text, imageSpec, platforms → para actionContext de botones
 //
 // ESTILO PLC/LADDER: entrada clara, salida clara
 
@@ -30,17 +30,21 @@ export function isApprovalMessage(text: string): boolean {
 
 // === ESTADO DEL GUARDIAN (por request HTTP) ===
 export interface GuardianState {
-  // Image tracking (para inyección UX + actionContext)
-  generateImageWasCalled: boolean;
-  lastGeneratedImageUrls: string[];
-
   // Tool tracking para Protección ④
   anyToolExecutedInRequest: boolean;
 
-  // Action context tracking (Fase 1B — datos para botones de acción)
+  // Action context tracking — datos para botones de acción
   lastGeneratedContent: string | null;
-  lastImagePrompt: string | null;
   connectedPlatforms: Array<{ platform: string; accountId: string }> | null;
+
+  // Image spec tracking (from describe_image tool — Claude describes, client generates)
+  describeImageWasCalled: boolean;
+  lastImageSpec: {
+    prompt: string;
+    model: string;
+    aspect_ratio: string;
+    count: number;
+  } | null;
 
   // OAuth tracking
   shouldClearOAuthCookie: boolean;
@@ -50,12 +54,11 @@ export interface GuardianState {
 
 export function createGuardianState(): GuardianState {
   return {
-    generateImageWasCalled: false,
-    lastGeneratedImageUrls: [],
     anyToolExecutedInRequest: false,
     lastGeneratedContent: null,
-    lastImagePrompt: null,
     connectedPlatforms: null,
+    describeImageWasCalled: false,
+    lastImageSpec: null,
     shouldClearOAuthCookie: false,
     linkedInCachedData: null,
     cachedConnectionOptions: null,
@@ -74,7 +77,7 @@ export function validateToolCall(
   _toolName: string,
   _state: GuardianState
 ): GuardianVerdict {
-  // Fase 2: Sin create_draft ni publish_post, no hay nada que bloquear
+  // Fase 3: Sin create_draft, publish_post, ni generate_image. Nada que bloquear.
   return ALLOW;
 }
 
@@ -91,7 +94,7 @@ export function validateEndTurn(
   // ───────────────────────────────────────────────
   // PROTECCIÓN ④: Cliente aprobó + Claude no usó tools
   // Si el cliente dijo "aprobado"/"dale" y Claude solo respondió texto,
-  // forzar a Claude a ejecutar generate_content o generate_image.
+  // forzar a Claude a ejecutar generate_content o describe_image.
   // ───────────────────────────────────────────────
   if (!state.anyToolExecutedInRequest && isApprovalMessage(lastUserMessage)) {
     console.log(`[DraftGuardian] ⛔ END_TURN BLOQUEADO (④): cliente aprobó "${lastUserMessage.trim().substring(0, 30)}" pero Claude no usó ninguna tool`);
@@ -102,8 +105,8 @@ export function validateEndTurn(
         `Respondiste SOLO con texto. Eso es INCORRECTO — debes ejecutar herramientas.\n\n` +
         `INSTRUCCIONES:\n` +
         `• Si el cliente aprobó el plan → llama generate_content para el primer post\n` +
-        `• Si el cliente pidió imagen → llama generate_image\n` +
-        `• NO necesitas publicar — el sistema lo hace automáticamente cuando el cliente aprueba la imagen\n\n` +
+        `• Si el cliente aprobó el texto y quiere imagen → llama describe_image\n` +
+        `• NO necesitas generar imágenes ni publicar — el sistema lo hace automáticamente cuando el cliente ejecuta acciones\n\n` +
         `RESPONDE USANDO tool_use. NO respondas con texto solamente.`,
     };
   }
@@ -121,29 +124,27 @@ export function updateStateAfterTool(
   // --- Marcar que al menos una tool se ejecutó ---
   state.anyToolExecutedInRequest = true;
 
-  // --- generate_image → rastrear URLs para inyección UX + actionContext ---
-  if (toolName === 'generate_image') {
-    state.generateImageWasCalled = true;
+  // --- generate_content → capturar texto para actionContext ---
+  if (toolName === 'generate_content') {
     try {
       const result = JSON.parse(toolResultJson);
-      if (result.success && result.images) {
-        state.lastGeneratedImageUrls = result.images;
-      } else if (result.success && result.image_url) {
-        state.lastGeneratedImageUrls = [result.image_url];
+      if (result.content?.text) {
+        state.lastGeneratedContent = result.content.text;
+        console.log(`[DraftGuardian] Content capturado: "${result.content.text.substring(0, 60)}..."`);
       }
     } catch {
       // No-op
     }
   }
 
-  // --- generate_content → capturar texto para actionContext ---
-  if (toolName === 'generate_content') {
+  // --- describe_image → capturar spec para actionContext ---
+  if (toolName === 'describe_image') {
+    state.describeImageWasCalled = true;
     try {
       const result = JSON.parse(toolResultJson);
-      // result.content es un objeto { text, hashtags, platform_versions }
-      if (result.content?.text) {
-        state.lastGeneratedContent = result.content.text;
-        console.log(`[DraftGuardian] Content capturado: "${result.content.text.substring(0, 60)}..."`);
+      if (result.image_spec) {
+        state.lastImageSpec = result.image_spec;
+        console.log(`[DraftGuardian] ImageSpec capturado: prompt="${result.image_spec.prompt.substring(0, 60)}...", model=${result.image_spec.model}`);
       }
     } catch {
       // No-op

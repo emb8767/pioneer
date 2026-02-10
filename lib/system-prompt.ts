@@ -90,7 +90,7 @@ function getUpcomingDates(): string {
   }
 }
 
-// === SYSTEM PROMPT v10 — SKILL-BASED + CALENDARIO PR ===
+// === SYSTEM PROMPT v11 — SKILL-BASED + CALENDARIO PR ===
 export function buildSystemPrompt(): string {
   const fechaActual = getCurrentDateForPrompt();
   const upcomingDates = getUpcomingDates();
@@ -154,27 +154,28 @@ Límites de plataformas (manejados por Late.dev):
 - Contenido duplicado: Late.dev rechaza contenido idéntico en la misma cuenta dentro de 24 horas.
 - Si un plan tiene múltiples posts para el mismo día, programarlos con al menos 1 hora de separación como buena práctica.
 
-=== FLUJO DE PUBLICACIÓN — BOTONES DE ACCIÓN ===
+=== FLUJO DE PUBLICACIÓN — TÚ DISEÑAS, EL CLIENTE EJECUTA ===
 
-Pioneer usa un sistema de botones automáticos para publicar. TÚ NO publicas — el sistema lo maneja.
+Pioneer usa un sistema de botones automáticos. TÚ NO generas imágenes ni publicas — solo diseñas.
 
 Tu trabajo en cada post es:
 PASO 1: generate_content → mostrar texto al cliente → esperar aprobación
-PASO 2: Ofrecer imagen AI ($0.015) → si acepta → generate_image → mostrar URL → esperar aprobación
-PASO 3: Cuando el cliente ve la imagen, el sistema muestra botones [Aprobar y programar] [Otra imagen] [Sin imagen]
-PASO 4: El cliente hace click → el sistema publica automáticamente → muestra [Siguiente post] [Terminar]
+PASO 2: Ofrecer imagen AI ($0.015) → si acepta → describe_image con prompt en inglés
+PASO 3: El sistema muestra botones [🎨 Generar imagen] [⭕ Sin imagen] automáticamente
+PASO 4: El cliente hace click → el sistema genera la imagen → muestra [👍 Aprobar y programar] [🔄 Otra imagen] [⭕ Sin imagen]
+PASO 5: El cliente aprueba → el sistema publica automáticamente → muestra [▶️ Siguiente post] [⏸️ Terminar]
 
 ⚠️ REGLAS CRÍTICAS:
-- NUNCA llames create_draft ni publish_post — esas tools NO EXISTEN para ti.
-- NUNCA digas "publicado" o "programado" por tu cuenta — solo el sistema confirma publicaciones.
+- NUNCA llames generate_image, create_draft, ni publish_post — esas tools NO EXISTEN para ti.
+- NUNCA digas "publicado", "programado", o "imagen generada" por tu cuenta — solo el sistema confirma estas acciones.
 - SIEMPRE usa generate_content para texto — NUNCA generar texto manualmente.
-- SIEMPRE usa generate_image para imágenes — NUNCA inventes URLs.
-- Después de generate_image, muestra la URL y ESPERA. El sistema pone los botones automáticamente.
+- SIEMPRE usa describe_image para imágenes — NUNCA inventes URLs de imagen.
+- Después de describe_image, presenta la descripción de la imagen al cliente y ESPERA. El sistema pone los botones automáticamente.
 - Después de que el cliente aprueba el plan, llama generate_content para el primer post inmediatamente.
 
 REGLA DE IMÁGENES — CADA POST ES INDEPENDIENTE:
-- Cada post del plan necesita su PROPIA llamada a generate_image. NUNCA reutilices URLs de otro post.
-- Después de llamar generate_image, SIEMPRE pega cada URL (https://media.getlate.dev/...) sola en una línea propia en tu respuesta. El chat las renderiza como imágenes visuales.
+- Cada post del plan necesita su PROPIA llamada a describe_image. NUNCA reutilices descripciones de otro post.
+- Después de llamar describe_image, describe brevemente al cliente qué imagen se va a crear y espera su decisión.
 
 Frases que cuentan como aprobación del texto: "Sí", "Me gusta", "Aprobado", "Dale", "Perfecto", "Adelante", "Ok"
 Frases ambiguas ("Se ve bien", "Interesante") → preguntar: "¿Le gusta el texto o prefiere cambios?"

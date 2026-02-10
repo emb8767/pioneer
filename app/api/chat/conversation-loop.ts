@@ -8,7 +8,8 @@
 //    - Protección ④: aprobación sin tools → forzar acción (máximo 2 retries)
 // 5. Recoger texto acumulado + estado final
 //
-// ESTILO PLC/LADDER: el loop es el scan cycle, el guardian es el interlock
+// Fase 3: Flujo típico: list_accounts → generate_content → describe_image = 3 tools
+// Claude no genera imágenes ni publica — solo diseña. El cliente ejecuta acciones.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSystemPrompt } from '@/lib/system-prompt';
@@ -27,7 +28,7 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Fase 2: Flujo típico: list_accounts → generate_content → generate_image = 3
+// Fase 3: Flujo típico: list_accounts → generate_content → describe_image = 3
 // Con queue setup: +1. Con guardian retry: +1-2. Margen: 7 total.
 const MAX_TOOL_USE_ITERATIONS = 7;
 
@@ -63,7 +64,6 @@ export async function runConversationLoop(
   let lastUsage: Anthropic.Usage | null = null;
 
   // Protección ④: limitar a 2 retries para evitar loop infinito
-  // Si Claude ignora 2 forzamientos, dejarlo terminar (mejor que un loop costoso)
   let approvalForceRetryCount = 0;
 
   const systemPrompt = buildSystemPrompt();
@@ -96,25 +96,20 @@ export async function runConversationLoop(
     // CASO 1: Claude quiere terminar (end_turn)
     // ═══════════════════════════════════════════════
     if (response.stop_reason === 'end_turn') {
-      // PROTECCIÓN ① + ④: ¿Debe forzar continuación?
       const endVerdict = validateEndTurn(guardianState, lastUserMessage);
 
       if (!endVerdict.allowed && endVerdict.forceMessage) {
-        // Protección ④ tiene límite de 2 retries para evitar loop infinito
         const isProtection4 = !guardianState.anyToolExecutedInRequest;
 
         if (isProtection4 && approvalForceRetryCount >= 2) {
-          // Ya intentamos 2 veces — dejar que Claude termine
           console.log(`[DraftGuardian] Protección ④ agotó ${approvalForceRetryCount} retries — permitiendo end_turn`);
           break;
         }
 
         if (isProtection4) {
           approvalForceRetryCount++;
-          // LIMPIAR texto alucinado: si Claude dijo "programado/guardado" sin tools,
-          // ese texto es mentira. Remover el texto de ESTA iteración.
+          // LIMPIAR texto alucinado: si Claude dijo "programado/guardado" sin tools
           if (textBlocks.length > 0) {
-            // Quitar los textos que acabamos de agregar en esta iteración
             for (let t = 0; t < textBlocks.length; t++) {
               finalTextParts.pop();
             }
@@ -122,14 +117,12 @@ export async function runConversationLoop(
           }
         }
 
-        // NO dejar que termine — inyectar mensaje sistema para forzar continuación
         console.log(`[DraftGuardian] Forzando continuación (retry ${approvalForceRetryCount}/2)`);
         currentMessages = [
           ...currentMessages,
           { role: 'assistant' as const, content: response.content },
           { role: 'user' as const, content: endVerdict.forceMessage },
         ];
-        // Continuar el loop — Claude recibirá el mensaje de forzamiento
         continue;
       }
 
@@ -146,7 +139,6 @@ export async function runConversationLoop(
       );
 
       if (toolUseBlocks.length === 0) {
-        // Edge case: stop_reason es tool_use pero no hay blocks
         finalTextParts.push('Error interno: tool_use sin herramientas.');
         break;
       }
@@ -160,8 +152,6 @@ export async function runConversationLoop(
         const verdict = validateToolCall(toolBlock.name, guardianState);
 
         if (!verdict.allowed) {
-          // BLOQUEADO — devolver error como tool_result
-          // Claude recibirá este mensaje y deberá corregir su flujo
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolBlock.id,
@@ -172,7 +162,7 @@ export async function runConversationLoop(
             }),
             is_error: true,
           });
-          continue; // No ejecutar esta tool
+          continue;
         }
 
         // ─────────────────────────────────────────
@@ -186,8 +176,6 @@ export async function runConversationLoop(
         const toolResult = await executeTool(
           toolBlock.name,
           toolBlock.input as Record<string, unknown>,
-          guardianState.generateImageWasCalled,
-          guardianState.lastGeneratedImageUrls,
           pendingOAuthData,
           guardianState.linkedInCachedData,
           guardianState.cachedConnectionOptions
@@ -197,14 +185,6 @@ export async function runConversationLoop(
         // DRAFT GUARDIAN: Actualizar estado DESPUÉS
         // ─────────────────────────────────────────
         updateStateAfterTool(toolBlock.name, toolResult.result, guardianState);
-
-        // Capturar image prompt del input (Fase 1B — para regenerate)
-        if (toolBlock.name === 'generate_image') {
-          const imgInput = toolBlock.input as Record<string, unknown>;
-          if (imgInput.prompt && typeof imgInput.prompt === 'string') {
-            guardianState.lastImagePrompt = imgInput.prompt;
-          }
-        }
 
         // Actualizar estado OAuth del guardian desde tool result
         if (toolResult.shouldClearOAuthCookie) guardianState.shouldClearOAuthCookie = true;
