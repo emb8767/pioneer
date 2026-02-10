@@ -371,10 +371,24 @@ export async function activateDraft(
   postId: string,
   data: ActivateDraftData
 ): Promise<{ message: string; post: LatePost }> {
-  return lateRequest(`/posts/${postId}`, {
+  // CRITICAL: isDraft: false tells Late.dev to transition from draft → scheduled/published.
+  // Without this, the PUT updates fields but keeps the post as a draft.
+  const result = await lateRequest<{ message: string; post: LatePost }>(`/posts/${postId}`, {
     method: 'PUT',
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      ...data,
+      isDraft: false,
+    }),
   });
+
+  // Validate that the post actually transitioned out of draft status
+  if (result.post?.status === 'draft') {
+    console.warn(`[Pioneer] ⚠️ activateDraft: post ${postId} still has status=draft after PUT. Data sent:`, JSON.stringify(data));
+  } else {
+    console.log(`[Pioneer] activateDraft OK: post ${postId} status=${result.post?.status}`);
+  }
+
+  return result;
 }
 
 export async function listPosts(): Promise<{ posts: LatePost[] }> {
