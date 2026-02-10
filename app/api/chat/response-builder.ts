@@ -2,12 +2,13 @@
 //
 // RESPONSABILIDADES:
 // 1. Detectar botones en texto de Claude + estado del guardian (describe_image)
-// 2. Incluir actionContext cuando hay botones de acción
+// 2. Incluir actionContext cuando hay datos relevantes (content, platforms, imageSpec)
 // 3. Limpiar cookie OAuth si fue consumida
 // 4. Devolver NextResponse con JSON + headers
 //
-// Fase 3: Sin inyección de image URLs — Claude ya no genera imágenes.
-// Las imágenes se generan cuando el cliente clickea [🎨 Generar imagen].
+// Fase 3 fix: actionContext se incluye SIEMPRE que haya datos relevantes,
+// no solo cuando hay botones de acción. Esto permite al frontend persistir
+// content/platforms entre requests para cuando los botones de acción aparezcan después.
 
 import { NextResponse } from 'next/server';
 import { COOKIE_NAME } from '@/lib/oauth-cookie';
@@ -41,18 +42,23 @@ export function buildResponse(result: ConversationResult): NextResponse {
     console.log(`[Pioneer] Botones detectados: ${buttons.length} (${buttons.map(b => b.id).join(', ')})`);
   }
 
-  // === CONSTRUIR ACTION CONTEXT (solo si hay botones de acción) ===
+  // === CONSTRUIR ACTION CONTEXT ===
+  // Se incluye SIEMPRE que haya datos relevantes (content, platforms, imageSpec).
+  // Razón: generate_content y describe_image pueden ocurrir en requests SEPARADOS.
+  // El frontend persiste el actionContext entre mensajes y lo merge cuando necesita.
   let actionContext: ActionContext | undefined;
 
-  if (buttons?.some(b => b.type === 'action')) {
+  const hasContent = !!state.lastGeneratedContent;
+  const hasImageSpec = !!state.lastImageSpec;
+  const hasPlatforms = !!state.connectedPlatforms;
+
+  if (hasContent || hasImageSpec || hasPlatforms) {
     actionContext = {};
 
-    // Contenido del post
     if (state.lastGeneratedContent) {
       actionContext.content = state.lastGeneratedContent;
     }
 
-    // Image spec (from describe_image)
     if (state.lastImageSpec) {
       actionContext.imagePrompt = state.lastImageSpec.prompt;
       actionContext.imageModel = state.lastImageSpec.model;
@@ -60,12 +66,11 @@ export function buildResponse(result: ConversationResult): NextResponse {
       actionContext.imageCount = state.lastImageSpec.count;
     }
 
-    // Plataformas conectadas
     if (state.connectedPlatforms) {
       actionContext.platforms = state.connectedPlatforms;
     }
 
-    console.log(`[Pioneer] ActionContext incluido: content=${!!actionContext.content}, imageSpec=${!!state.lastImageSpec}, platforms=${actionContext.platforms?.length || 0}`);
+    console.log(`[Pioneer] ActionContext incluido: content=${hasContent}, imageSpec=${hasImageSpec}, platforms=${hasPlatforms ? state.connectedPlatforms!.length : 0}`);
   }
 
   // === CONSTRUIR RESPUESTA JSON ===

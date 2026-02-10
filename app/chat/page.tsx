@@ -334,8 +334,41 @@ Necesito completar la conexión.`;
   ) => {
     setActionLoading(messageIndex);
 
-    // Construir params desde actionContext + la acción específica
-    const params: Record<string, unknown> = { ...actionContext };
+    // Merge actionContext: el mensaje actual puede tener solo imageSpec,
+    // pero un mensaje anterior puede tener content y platforms.
+    // Recorrer hacia atrás y acumular datos faltantes.
+    const mergedContext: ActionContext = { ...actionContext };
+
+    for (let i = messageIndex - 1; i >= 0; i--) {
+      const prevCtx = messages[i]?.actionContext;
+      if (!prevCtx) continue;
+
+      // Solo llenar campos que NO existen en el context actual
+      if (!mergedContext.content && prevCtx.content) {
+        mergedContext.content = prevCtx.content;
+      }
+      if (!mergedContext.platforms && prevCtx.platforms) {
+        mergedContext.platforms = prevCtx.platforms;
+      }
+      if (!mergedContext.imagePrompt && prevCtx.imagePrompt) {
+        mergedContext.imagePrompt = prevCtx.imagePrompt;
+      }
+      if (!mergedContext.imageModel && prevCtx.imageModel) {
+        mergedContext.imageModel = prevCtx.imageModel;
+      }
+      if (!mergedContext.imageAspectRatio && prevCtx.imageAspectRatio) {
+        mergedContext.imageAspectRatio = prevCtx.imageAspectRatio;
+      }
+      if (!mergedContext.imageCount && prevCtx.imageCount) {
+        mergedContext.imageCount = prevCtx.imageCount;
+      }
+
+      // Si ya tenemos todo, parar
+      if (mergedContext.content && mergedContext.platforms) break;
+    }
+
+    // Construir params desde mergedContext
+    const params: Record<string, unknown> = { ...mergedContext };
 
     try {
       const response = await fetch('/api/chat/action', {
@@ -354,10 +387,14 @@ Necesito completar la conexión.`;
         role: 'assistant',
         content: data.message,
         ...(data.buttons && { buttons: data.buttons }),
-        // Si action-handler devuelve actionContext (ej: generate_image con nuevas URLs),
-        // usar ese. Si no, propagar el actionContext original.
+        // Merge: action-handler puede devolver actionContext parcial (ej: solo imageUrls).
+        // Combinarlo con mergedContext para que el próximo botón tenga todo.
         ...(data.buttons?.some((b: ButtonConfig) => b.type === 'action') && {
-          actionContext: data.actionContext || actionContext,
+          actionContext: { ...mergedContext, ...(data.actionContext || {}) },
+        }),
+        // Si no hay action buttons pero sí hay actionContext del server, guardarlo igual
+        ...(!data.buttons?.some((b: ButtonConfig) => b.type === 'action') && data.actionContext && {
+          actionContext: { ...mergedContext, ...data.actionContext },
         }),
       };
 

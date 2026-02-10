@@ -118,30 +118,33 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
 
   // ══════════════════════════════════════════════════
   // PRIORIDAD 10-14: PREGUNTAS DE ENTREVISTA
+  // Solo matchean PREGUNTAS DIRECTAS (con signos de interrogación).
+  // NO deben matchear menciones casuales en resúmenes o contexto.
   // ══════════════════════════════════════════════════
 
   // 10. ¿Cómo le llegan los clientes?
-  if (/¿cómo le llegan los clientes|¿cómo llegan.*clientes|pasan por el frente.*referid|referid.*redes sociales/i.test(tail)) {
+  if (/¿cómo le llegan los clientes|¿cómo llegan.*clientes\?/i.test(tail)) {
     return buildClientSourceButtons();
   }
 
   // 11. ¿Qué quiere lograr?
-  if (/¿qué (quiere|desea|le gustaría) lograr|¿qué.*quiere.*marketing|más clientes.*más ventas.*darse a conocer/i.test(tail)) {
+  if (/¿qué (quiere|desea|le gustaría) lograr|¿qué.*quiere.*marketing\?/i.test(tail)) {
     return buildGoalButtons();
   }
 
   // 12. ¿Qué valoran sus clientes?
-  if (/¿qué.*clientes.*valoran|¿qué.*más valoran|calidad.*precio.*servicio.*rapid/i.test(tail)) {
+  if (/¿qué.*clientes.*valoran|¿qué.*más valoran/i.test(tail)) {
     return buildValueButtons();
   }
 
   // 13. ¿Ha hecho marketing antes?
-  if (/¿ha hecho marketing|¿ha (publicado|hecho).*redes|marketing o publicidad antes|primera vez/i.test(tail)) {
+  // ESTRICTO: solo matchea la pregunta directa con ¿, NO menciones como "primera vez" en resúmenes
+  if (/¿ha hecho marketing|¿ha (publicado|hecho).*redes\?|marketing o publicidad antes\?/i.test(tail)) {
     return buildMarketingHistoryButtons();
   }
 
   // 14. ¿Tiene oferta o promoción?
-  if (/¿tiene.*(oferta|promoción)|oferta o promoción activa|promoción.*activa/i.test(tail)) {
+  if (/¿tiene.*(oferta|promoción)\??/i.test(tail)) {
     return buildHasPromoButtons();
   }
 
