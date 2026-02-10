@@ -121,12 +121,22 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
     const isQuestionList = questionCount > numberedOptions.length / 2;
     console.log(`[ButtonDetector] P6 questionFilter: ${questionCount}/${numberedOptions.length} end with ?, isQuestionList=${isQuestionList}`);
 
-    if (!isQuestionList) {
+    // FIX #4: Si es un resumen de posts completados/programados, no generar botones.
+    // Detecta: "✅" antes de items, o palabras de resumen cerca de la lista.
+    const isSummaryList = /✅\s*(post|publicaci|completad|programad)/i.test(tail) ||
+      /resumen|progreso|completados|programados/i.test(tail.slice(-500));
+    if (isSummaryList) {
+      console.log(`[ButtonDetector] P6 SKIP: summary/completed list detected`);
+    }
+
+    if (!isQuestionList && !isSummaryList) {
       console.log(`[ButtonDetector] P6 MATCH: building ${numberedOptions.length} option buttons`);
       return buildOptionButtons(numberedOptions);
     }
-    // Si son preguntas, caemos al flujo normal (texto libre)
-    console.log(`[ButtonDetector] P6 SKIP: question list detected`);
+    // Si son preguntas o resumen, caemos al flujo normal (texto libre)
+    if (isQuestionList) {
+      console.log(`[ButtonDetector] P6 SKIP: question list detected`);
+    }
   }
 
   // ══════════════════════════════════════════════════
