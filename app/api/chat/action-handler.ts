@@ -237,6 +237,10 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
 async function handleApproveAndPublish(params: ActionRequest['params']): Promise<ActionResponse> {
   const { content, imageUrls, platforms, scheduledFor, publishNow } = params;
 
+  // --- Diagnóstico: qué content se está publicando ---
+  console.log(`[Pioneer Action] approve_and_publish content: "${content?.substring(0, 80)}..."`);
+  console.log(`[Pioneer Action] approve_and_publish imageUrls: ${imageUrls?.length || 0}`);
+
   // --- Validaciones ---
   if (!content) {
     return { success: false, message: 'Error: no hay contenido para publicar.', error: 'missing_content' };

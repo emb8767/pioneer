@@ -3,16 +3,16 @@
 // RESPONSABILIDADES:
 // 1. Parsear texto de Claude buscando patrones predecibles
 // 2. Generar botones de OPCIÓN (envían texto al chat como si el cliente escribiera)
-// 3. Usar guardianState para detectar describe_image → botones de generación
+// 3. Generar botones de ACCIÓN para aprobación de texto (approve_text)
 //
 // PRINCIPIO: Si Claude puede predecir las respuestas posibles → BOTONES
 //            Si no puede predecirlas → TEXTO LIBRE
 //            El input de texto SIEMPRE está disponible — botones complementan, no reemplazan.
 //
 // PRIORIDADES DE DETECCIÓN (primera que matchea gana):
-//  1. Imagen descrita (via guardianState.describeImageWasCalled) → [Generar imagen] [Sin imagen]
+//  1. (ELIMINADA — Fase 4: imagen ahora se maneja via approve_text action)
 //  2. Aprobación de plan → [Aprobado] [Cambios]
-//  3. Aprobación de texto → [Me gusta] [Cambios]
+//  3. Aprobación de texto → [Me gusta] [Cambios] (acción, no opción)
 //  4. Publicar ahora vs programar → [Ahora] [Según el plan]
 //  5. Oferta de imagen → [Sí, generar] [Sin imagen]
 //  6. Lista numerada (2+ items, NO preguntas) → botones por opción + "Otra idea"
@@ -56,13 +56,10 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   const tail = text.length > 1500 ? text.slice(-1500) : text;
 
   // ══════════════════════════════════════════════════
-  // PRIORIDAD 1: Imagen descrita (via guardianState — describe_image fue llamada)
-  // → Botones de ACCIÓN: cliente ejecuta generación de imagen
+  // PRIORIDAD 1: ELIMINADA (Fase 4)
+  // describe_image ya no existe. Los botones de imagen los maneja
+  // approve_text en action-handler.ts directamente.
   // ══════════════════════════════════════════════════
-  if (state?.describeImageWasCalled && state.hasImageSpec) {
-    console.log(`[ButtonDetector] P1 MATCH: describeImageWasCalled + hasImageSpec`);
-    return buildImageGenerateButtons();
-  }
 
   // ══════════════════════════════════════════════════
   // PRIORIDAD 2-5: Preguntas específicas del flujo de publicación
