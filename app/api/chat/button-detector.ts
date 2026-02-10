@@ -203,7 +203,7 @@ function extractNumberedOptions(text: string): Array<{ number: number; text: str
   const lines = text.split('\n');
 
   for (const line of lines) {
-    const match = line.match(/^\s*(\d+)[.)]\s+(?:\*\*)?([^—\n*]+)/);
+    const match = line.match(/^\s*(?:\*\*)?(\d+)[.)]\s*(?:\*\*)?([^—\n*]+)/);
     if (match) {
       const optText = match[2].trim().replace(/\*\*/g, '').replace(/\s*[-–—:]\s*$/, '');
       // fullText = todo después del número, para detectar si termina en ?
