@@ -211,6 +211,17 @@ function buildOptionButtons(options: Array<{ number: number; text: string; fullT
     };
   });
 
+  // Si hay 3+ opciones, agregar botón "Todas" para selección abierta
+  if (options.length >= 3) {
+    buttons.push({
+      id: 'option_all',
+      label: '✅ Todas',
+      type: 'option',
+      style: 'primary',
+      chatMessage: 'Me gustan todas, vamos con todas',
+    });
+  }
+
   buttons.push({
     id: 'option_other',
     label: '✏️ Otra idea',

@@ -14,7 +14,7 @@ import {
   createDraftWithRetry,
   activateDraftWithRetry,
 } from '@/lib/publish-validator';
-import { listAccounts, LateApiError, PR_TIMEZONE, getNextOptimalTime } from '@/lib/late-client';
+import { listAccounts, LateApiError, PR_TIMEZONE } from '@/lib/late-client';
 import { generateImage } from '@/lib/replicate-client';
 import type { ButtonConfig } from './button-detector';
 
@@ -251,21 +251,27 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     return { success: false, message: `Error creando borrador: ${msg}`, error: 'draft_error' };
   }
 
-  // --- Paso 2: Activar draft (publicar/programar) ---
+  // --- Paso 2: Activar draft (publicar/programar via Queue) ---
+  // PROFILE_ID de Pioneer en Late.dev
+  const PIONEER_PROFILE_ID = '6984c371b984889d86a8b3d6';
+
   const activateData: {
     publishNow?: boolean;
     scheduledFor?: string;
     timezone?: string;
+    queuedFromProfile?: string;
   } = {};
 
   if (publishNow) {
     activateData.publishNow = true;
   } else if (scheduledFor) {
+    // Si se pasó una fecha específica (ej: fecha crítica como San Valentín), usarla
     activateData.scheduledFor = scheduledFor;
     activateData.timezone = PR_TIMEZONE;
   } else {
-    activateData.scheduledFor = getNextOptimalTime();
-    activateData.timezone = PR_TIMEZONE;
+    // Por defecto: usar Queue de Late.dev para asignar automáticamente el próximo slot
+    // Late.dev maneja distributed locking para evitar race conditions
+    activateData.queuedFromProfile = PIONEER_PROFILE_ID;
   }
 
   try {
@@ -273,7 +279,9 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
 
     const timeLabel = activateData.publishNow
       ? 'publicado ahora'
-      : `programado para ${formatScheduledTime(activateData.scheduledFor!)}`;
+      : activateData.scheduledFor
+        ? `programado para ${formatScheduledTime(activateData.scheduledFor)}`
+        : 'agregado a la cola de publicación';
 
     console.log(`[Pioneer Action] ✅ Post ${timeLabel} (draft: ${draftId})`);
 
