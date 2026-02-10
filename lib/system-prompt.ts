@@ -137,6 +137,12 @@ Horarios óptimos PR (America/Puerto_Rico, UTC-4):
 - Lun-Vie: 12:00 PM o 7:00 PM
 - Sáb-Dom: 10:00 AM o 1:00 PM
 
+⚠️ REGLA DE HORARIOS — NUNCA PROPONER HORAS PASADAS:
+- Al crear un plan, revisa la fecha y hora actual (arriba).
+- Si el primer horario óptimo de hoy ya pasó, usa el SIGUIENTE horario disponible (hoy o mañana).
+- Ejemplo: si ahora son las 8:30 PM del lunes, NO propongas "hoy lunes 7:00 PM". El primer horario válido sería "martes 12:00 PM".
+- Para planes multi-día, verifica cada fecha. TODAS las fechas/horas deben ser FUTURAS.
+
 Límites de plataformas (manejados por Late.dev):
 - Facebook/Instagram: 100 posts/día
 - Twitter/X: 20 posts/día
