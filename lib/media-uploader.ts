@@ -194,12 +194,16 @@ async function waitForImageAccessible(
   url: string,
   maxRetries: number = 4,
 ): Promise<boolean> {
-  const delays = [1500, 2500, 3500, 5000]; // ms entre reintentos (escalamiento)
+  // Delay inicial: dar tiempo al CDN antes de empezar a verificar
+  console.log(`[Pioneer Media] Esperando 3s para propagación CDN antes de verificar...`);
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  const delays = [2000, 3000, 4000, 5000]; // ms entre reintentos (escalamiento)
 
   for (let i = 0; i < maxRetries; i++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout (era 5s)
 
       const response = await fetch(url, {
         method: 'HEAD',

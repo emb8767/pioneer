@@ -135,7 +135,7 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
   const [status, setStatus] = useState<'loading' | 'loaded' | 'retrying' | 'error'>('loading');
   const [imgSrc, setImgSrc] = useState(url);
   const retryCount = useRef(0);
-  const maxRetries = 2;
+  const maxRetries = 3;
 
   return (
     <span className="block my-3">
@@ -158,8 +158,9 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
               if (retryCount.current < maxRetries) {
                 retryCount.current += 1;
                 setStatus('retrying');
-                // Delay escalado: 2s, 4s
-                const delay = retryCount.current * 2000;
+                // Delays escalados: 3s, 5s, 8s
+                const delays = [3000, 5000, 8000];
+                const delay = delays[retryCount.current - 1] || 5000;
                 setTimeout(() => {
                   const separator = url.includes('?') ? '&' : '?';
                   setImgSrc(`${url}${separator}_retry=${Date.now()}`);
@@ -172,7 +173,7 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
           {(status === 'loading' || status === 'retrying') && (
             <div className="flex items-center gap-2 text-gray-400 text-sm py-4">
               <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-              {status === 'retrying' ? 'Reintentando cargar imagen...' : 'Cargando imagen...'}
+              {status === 'retrying' ? `Cargando imagen (intento ${retryCount.current + 1})...` : 'Cargando imagen...'}
             </div>
           )}
         </>
