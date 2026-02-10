@@ -58,6 +58,11 @@ export interface GuardianState {
   // Tool tracking para Protección ④
   anyToolExecutedInRequest: boolean; // true si al menos 1 tool se ejecutó en este request
 
+  // Action context tracking (Fase 1B — datos para botones de acción)
+  lastGeneratedContent: string | null;    // Último texto de generate_content
+  lastImagePrompt: string | null;         // Último prompt de generate_image
+  connectedPlatforms: Array<{ platform: string; accountId: string }> | null;
+
   // OAuth tracking
   shouldClearOAuthCookie: boolean;
   linkedInCachedData: Record<string, unknown> | null;
@@ -72,6 +77,9 @@ export function createGuardianState(): GuardianState {
     generateImageWasCalled: false,
     lastGeneratedImageUrls: [],
     anyToolExecutedInRequest: false,
+    lastGeneratedContent: null,
+    lastImagePrompt: null,
+    connectedPlatforms: null,
     shouldClearOAuthCookie: false,
     linkedInCachedData: null,
     cachedConnectionOptions: null,
@@ -249,6 +257,38 @@ export function updateStateAfterTool(
         state.lastGeneratedImageUrls = result.images;
       } else if (result.success && result.image_url) {
         state.lastGeneratedImageUrls = [result.image_url];
+      }
+    } catch {
+      // No-op
+    }
+  }
+
+  // --- generate_content → capturar texto para actionContext (Fase 1B) ---
+  if (toolName === 'generate_content') {
+    try {
+      const result = JSON.parse(toolResultJson);
+      if (result.success && result.content) {
+        state.lastGeneratedContent = result.content;
+      }
+    } catch {
+      // No-op
+    }
+  }
+
+  // --- generate_image → capturar prompt para regenerate (Fase 1B) ---
+  // (nota: el prompt viene del input, no del result — lo capturamos en conversation-loop)
+
+  // --- list_connected_accounts → capturar plataformas para actionContext (Fase 1B) ---
+  if (toolName === 'list_connected_accounts') {
+    try {
+      const result = JSON.parse(toolResultJson);
+      if (result.success && result.accounts) {
+        state.connectedPlatforms = result.accounts.map(
+          (acc: { _id: string; platform: string }) => ({
+            platform: acc.platform,
+            accountId: acc._id,
+          })
+        );
       }
     } catch {
       // No-op

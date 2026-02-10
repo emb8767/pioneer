@@ -14,11 +14,19 @@ interface ButtonConfig {
   params?: Record<string, unknown>;
 }
 
+interface ActionContext {
+  content?: string;
+  imageUrls?: string[];
+  imagePrompt?: string;
+  platforms?: Array<{ platform: string; accountId: string }>;
+}
+
 interface Message {
   role: 'user' | 'assistant';
   content: string;
   buttons?: ButtonConfig[];
   buttonsDisabled?: boolean;
+  actionContext?: ActionContext;
 }
 
 // === RENDERIZAR CONTENIDO DEL MENSAJE ===
@@ -40,18 +48,12 @@ function MessageContent({ content }: { content: string }) {
     }
 
     // Combined regex — ORDER MATTERS (most specific first)
-    // Group 1,2: Markdown image ![alt](url)
-    // Group 3: Bare image URL (replicate.delivery, media.getlate.dev, or common image extensions)
-    // Group 4,5: Markdown link [text](url)
-    // Group 6: Bare URL (any https://...)
-    // Group 7: Bold **text**
     const combinedRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)|(https:\/\/replicate\.delivery\/[^\s)]+|https:\/\/media\.getlate\.dev\/[^\s)]+|https?:\/\/[^\s)]+\.(?:webp|png|jpg|jpeg|gif))|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)]+)|\*\*([^*]+)\*\*/g;
 
     let lastIndex = 0;
     let match;
 
     while ((match = combinedRegex.exec(line)) !== null) {
-      // Add text before the match
       if (match.index > lastIndex) {
         parts.push(
           <span key={`text-${lineIdx}-${lastIndex}`}>
@@ -84,7 +86,7 @@ function MessageContent({ content }: { content: string }) {
           </span>
         );
       } else if (match[3]) {
-        // Bare image URL (replicate.delivery, media.getlate.dev, or image extension)
+        // Bare image URL
         const url = match[3];
         parts.push(
           <span key={`bareimg-${lineIdx}-${match.index}`} className="block my-3">
@@ -119,7 +121,7 @@ function MessageContent({ content }: { content: string }) {
           </a>
         );
       } else if (match[6]) {
-        // Bare URL — make clickable
+        // Bare URL
         const url = match[6];
         parts.push(
           <a
@@ -142,7 +144,6 @@ function MessageContent({ content }: { content: string }) {
       lastIndex = match.index + match[0].length;
     }
 
-    // Add remaining text after last match
     if (lastIndex < line.length) {
       parts.push(
         <span key={`text-${lineIdx}-${lastIndex}`}>
@@ -160,40 +161,48 @@ function MessageContent({ content }: { content: string }) {
 function ActionButtons({
   buttons,
   disabled,
+  loading,
   onButtonClick,
 }: {
   buttons: ButtonConfig[];
   disabled: boolean;
+  loading: boolean;
   onButtonClick: (button: ButtonConfig) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2 mt-3">
-      {buttons.map((button) => {
-        const baseStyles = 'px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border';
+      {loading ? (
+        <div className="flex items-center gap-2 px-4 py-2 text-sm text-blue-600">
+          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          Programando publicación...
+        </div>
+      ) : (
+        buttons.map((button) => {
+          const baseStyles = 'px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border';
 
-        let styleClasses: string;
-        if (disabled) {
-          styleClasses = 'opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50';
-        } else if (button.style === 'primary') {
-          styleClasses = 'border-blue-500 text-blue-700 bg-white hover:bg-blue-50 cursor-pointer';
-        } else if (button.style === 'ghost') {
-          styleClasses = 'border-dashed border-gray-300 text-gray-500 bg-white hover:bg-gray-50 cursor-pointer';
-        } else {
-          // secondary
-          styleClasses = 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50 cursor-pointer';
-        }
+          let styleClasses: string;
+          if (disabled) {
+            styleClasses = 'opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50';
+          } else if (button.style === 'primary') {
+            styleClasses = 'border-blue-500 text-blue-700 bg-white hover:bg-blue-50 cursor-pointer';
+          } else if (button.style === 'ghost') {
+            styleClasses = 'border-dashed border-gray-300 text-gray-500 bg-white hover:bg-gray-50 cursor-pointer';
+          } else {
+            styleClasses = 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50 cursor-pointer';
+          }
 
-        return (
-          <button
-            key={button.id}
-            onClick={() => !disabled && onButtonClick(button)}
-            disabled={disabled}
-            className={`${baseStyles} ${styleClasses}`}
-          >
-            {button.label}
-          </button>
-        );
-      })}
+          return (
+            <button
+              key={button.id}
+              onClick={() => !disabled && onButtonClick(button)}
+              disabled={disabled}
+              className={`${baseStyles} ${styleClasses}`}
+            >
+              {button.label}
+            </button>
+          );
+        })
+      )}
     </div>
   );
 }
@@ -204,6 +213,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<number | null>(null); // index del msg con acción en curso
   const [pendingConnectionHandled, setPendingConnectionHandled] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -213,7 +223,7 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Mensaje de bienvenida — solo se ejecuta en el mount inicial
+  // Mensaje de bienvenida
   useEffect(() => {
     setMessages((prev) => {
       if (prev.length === 0) {
@@ -278,11 +288,11 @@ Necesito completar la conexión.`;
 
       const data = await response.json();
 
-      // Construir mensaje del assistant con botones si vienen
       const assistantMessage: Message = {
         role: 'assistant',
         content: data.message,
         ...(data.buttons && { buttons: data.buttons }),
+        ...(data.actionContext && { actionContext: data.actionContext }),
       };
 
       setMessages([...newMessages, assistantMessage]);
@@ -313,6 +323,61 @@ Necesito completar la conexión.`;
     await sendChatMessage(text, messages);
   };
 
+  // === EJECUTAR ACCIÓN (Fase 1B — llama /api/chat/action directo) ===
+  const executeAction = async (
+    button: ButtonConfig,
+    messageIndex: number,
+    actionContext?: ActionContext
+  ) => {
+    setActionLoading(messageIndex);
+
+    // Construir params desde actionContext + la acción específica
+    const params: Record<string, unknown> = { ...actionContext };
+
+    try {
+      const response = await fetch('/api/chat/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: button.action,
+          params,
+        }),
+      });
+
+      const data = await response.json();
+
+      // Agregar mensaje de resultado como assistant message
+      const resultMessage: Message = {
+        role: 'assistant',
+        content: data.message,
+        ...(data.buttons && { buttons: data.buttons }),
+        // Si regenerate devuelve nuevas imageUrls, pasar como actionContext
+        ...(data.buttons?.some((b: ButtonConfig) => b.type === 'action') && actionContext && {
+          actionContext: {
+            ...actionContext,
+            // Si hay nueva imagen en el mensaje, actualizar imageUrls
+            ...(data.message.includes('media.getlate.dev') && {
+              imageUrls: extractImageUrls(data.message),
+            }),
+          },
+        }),
+      };
+
+      setMessages(prev => [...prev, resultMessage]);
+    } catch (error) {
+      console.error('Error ejecutando acción:', error);
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: '❌ Error ejecutando la acción. Por favor intente de nuevo.',
+        },
+      ]);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   // === MANEJAR CLICK EN BOTÓN ===
   const handleButtonClick = (button: ButtonConfig, messageIndex: number) => {
     // 1. Deshabilitar TODOS los botones de este mensaje
@@ -327,7 +392,6 @@ Necesito completar la conexión.`;
         return;
       }
       // Enviar como mensaje de chat normal
-      // Usar el estado actualizado (con botones deshabilitados)
       setMessages(prev => {
         const updatedMessages = prev.map((msg, idx) =>
           idx === messageIndex ? { ...msg, buttonsDisabled: true } : msg
@@ -335,8 +399,11 @@ Necesito completar la conexión.`;
         sendChatMessage(button.chatMessage!, updatedMessages);
         return updatedMessages;
       });
+    } else if (button.type === 'action') {
+      // Buscar el actionContext del mensaje que tiene los botones
+      const msg = messages[messageIndex];
+      executeAction(button, messageIndex, msg?.actionContext);
     }
-    // type === 'action' se implementará en Fase 1B
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -379,6 +446,7 @@ Necesito completar la conexión.`;
                     <ActionButtons
                       buttons={message.buttons}
                       disabled={!!message.buttonsDisabled || isLoading}
+                      loading={actionLoading === index}
                       onButtonClick={(button) => handleButtonClick(button, index)}
                     />
                   </div>
@@ -427,6 +495,8 @@ Necesito completar la conexión.`;
   );
 }
 
+// === HELPERS ===
+
 function getPlatformDisplayName(platform: string): string {
   const names: Record<string, string> = {
     facebook: 'Facebook',
@@ -444,4 +514,15 @@ function getPlatformDisplayName(platform: string): string {
     snapchat: 'Snapchat',
   };
   return names[platform] || platform;
+}
+
+// Extraer URLs de imagen del texto (para actualizar actionContext después de regenerate)
+function extractImageUrls(text: string): string[] {
+  const urls: string[] = [];
+  const regex = /https:\/\/media\.getlate\.dev\/[^\s)]+/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    urls.push(match[0]);
+  }
+  return urls;
 }

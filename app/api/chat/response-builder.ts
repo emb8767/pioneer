@@ -2,9 +2,10 @@
 //
 // RESPONSABILIDADES:
 // 1. Inyectar URLs de imagen si Claude no las incluyó en el texto (UX)
-// 2. Detectar botones de opción en el texto de Claude (Fase 1A)
-// 3. Limpiar cookie OAuth si fue consumida
-// 4. Devolver NextResponse con JSON + headers
+// 2. Detectar botones en texto de Claude + estado del guardian (Fase 1A + 1B)
+// 3. Incluir actionContext cuando hay botones de acción (Fase 1B)
+// 4. Limpiar cookie OAuth si fue consumida
+// 5. Devolver NextResponse con JSON + headers
 //
 // ESTILO PLC/LADDER: entrada = ConversationResult, salida = NextResponse
 
@@ -12,7 +13,15 @@ import { NextResponse } from 'next/server';
 import { COOKIE_NAME } from '@/lib/oauth-cookie';
 import type { ConversationResult } from './conversation-loop';
 import { detectButtons } from './button-detector';
-import type { ButtonConfig } from './button-detector';
+import type { ButtonConfig, DetectorState } from './button-detector';
+
+// ActionContext — datos que el frontend necesita para ejecutar botones de acción
+interface ActionContext {
+  content?: string;           // Texto del post (para create_draft)
+  imageUrls?: string[];       // URLs permanentes de media.getlate.dev
+  imagePrompt?: string;       // Prompt para regenerar imagen
+  platforms?: Array<{ platform: string; accountId: string }>;
+}
 
 export function buildResponse(result: ConversationResult): NextResponse {
   let fullText = result.finalText;
@@ -30,15 +39,45 @@ export function buildResponse(result: ConversationResult): NextResponse {
     }
   }
 
-  // === DETECTAR BOTONES EN TEXTO DE CLAUDE ===
-  let buttons: ButtonConfig[] | undefined;
+  // === DETECTAR BOTONES ===
+  const detectorState: DetectorState = {
+    generateImageWasCalled: state.generateImageWasCalled,
+    lastGeneratedImageUrls: state.lastGeneratedImageUrls,
+  };
 
-  // Fase 1A: Solo botones de opción (basados en texto)
-  // Fase 1B añadirá: botones de acción (basados en estado del guardian)
-  buttons = detectButtons(fullText);
+  const buttons: ButtonConfig[] | undefined = detectButtons(fullText, detectorState);
 
   if (buttons) {
     console.log(`[Pioneer] Botones detectados: ${buttons.length} (${buttons.map(b => b.id).join(', ')})`);
+  }
+
+  // === CONSTRUIR ACTION CONTEXT (solo si hay botones de acción) ===
+  let actionContext: ActionContext | undefined;
+
+  if (buttons?.some(b => b.type === 'action')) {
+    actionContext = {};
+
+    // Contenido del post (del último generate_content)
+    if (state.lastGeneratedContent) {
+      actionContext.content = state.lastGeneratedContent;
+    }
+
+    // URLs de imagen
+    if (state.lastGeneratedImageUrls.length > 0) {
+      actionContext.imageUrls = state.lastGeneratedImageUrls;
+    }
+
+    // Prompt de imagen (para regenerate)
+    if (state.lastImagePrompt) {
+      actionContext.imagePrompt = state.lastImagePrompt;
+    }
+
+    // Plataformas conectadas
+    if (state.connectedPlatforms) {
+      actionContext.platforms = state.connectedPlatforms;
+    }
+
+    console.log(`[Pioneer] ActionContext incluido: content=${!!actionContext.content}, images=${actionContext.imageUrls?.length || 0}, platforms=${actionContext.platforms?.length || 0}`);
   }
 
   // === CONSTRUIR RESPUESTA JSON ===
@@ -46,6 +85,7 @@ export function buildResponse(result: ConversationResult): NextResponse {
     message: fullText,
     ...(result.lastUsage && { usage: result.lastUsage }),
     ...(buttons && { buttons }),
+    ...(actionContext && { actionContext }),
   });
 
   // === LIMPIAR COOKIE OAUTH SI FUE CONSUMIDA ===

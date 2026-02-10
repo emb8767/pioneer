@@ -199,6 +199,14 @@ export async function runConversationLoop(
         // ─────────────────────────────────────────
         updateStateAfterTool(toolBlock.name, toolResult.result, guardianState);
 
+        // Capturar image prompt del input (Fase 1B — para regenerate)
+        if (toolBlock.name === 'generate_image') {
+          const imgInput = toolBlock.input as Record<string, unknown>;
+          if (imgInput.prompt && typeof imgInput.prompt === 'string') {
+            guardianState.lastImagePrompt = imgInput.prompt;
+          }
+        }
+
         // Actualizar estado OAuth del guardian desde tool result
         if (toolResult.shouldClearOAuthCookie) guardianState.shouldClearOAuthCookie = true;
         if (toolResult.linkedInDataToCache) guardianState.linkedInCachedData = toolResult.linkedInDataToCache;
