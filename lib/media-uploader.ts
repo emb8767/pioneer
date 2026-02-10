@@ -117,6 +117,14 @@ export async function uploadToLateMedia(
     }
 
     console.log(`[Pioneer Media] ✅ Upload EXITOSO: ${presignData.publicUrl}`);
+
+    // === 5. Esperar a que la URL sea accesible (CDN propagation) ===
+    console.log(`[Pioneer Media] Paso 5: Verificando accesibilidad de URL...`);
+    const accessible = await waitForImageAccessible(presignData.publicUrl);
+    if (!accessible) {
+      console.warn(`[Pioneer Media] ⚠️ URL no accesible tras reintentos, retornando de todas formas (frontend tiene retry)`);
+    }
+
     return presignData.publicUrl;
 
   } catch (error) {
@@ -176,4 +184,54 @@ function extensionToMimeType(ext: string): string {
     mov: 'video/quicktime',
   };
   return mimeTypes[ext] || 'image/webp';
+}
+
+// === VALIDACIÓN POST-UPLOAD: CDN PROPAGATION ===
+// Después de subir a Late.dev, el CDN tarda 2-5 segundos en propagar.
+// Verificamos con HEAD requests antes de enviar la URL al frontend.
+
+async function waitForImageAccessible(
+  url: string,
+  maxRetries: number = 4,
+): Promise<boolean> {
+  const delays = [1500, 2500, 3500, 5000]; // ms entre reintentos (escalamiento)
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch(url, {
+        method: 'HEAD',
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.startsWith('image/')) {
+          console.log(`[Pioneer Media] ✅ URL accesible (intento ${i + 1}/${maxRetries}): ${url.substring(0, 60)}...`);
+          return true;
+        }
+        // Content-type no es imagen — CDN puede estar devolviendo placeholder
+        console.warn(`[Pioneer Media] ⚠️ URL respondió 200 pero content-type=${contentType} (intento ${i + 1})`);
+      } else {
+        console.warn(`[Pioneer Media] ⚠️ URL no accesible: HTTP ${response.status} (intento ${i + 1}/${maxRetries})`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown';
+      console.warn(`[Pioneer Media] ⚠️ Error verificando URL (intento ${i + 1}/${maxRetries}): ${msg}`);
+    }
+
+    // Esperar antes del siguiente intento
+    if (i < maxRetries - 1) {
+      const delay = delays[i] || 3000;
+      console.log(`[Pioneer Media] Esperando ${delay}ms antes de reintentar...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  console.warn(`[Pioneer Media] ❌ URL no accesible después de ${maxRetries} intentos: ${url.substring(0, 60)}...`);
+  return false;
 }

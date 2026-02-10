@@ -128,13 +128,14 @@ function MessageContent({ content }: { content: string }) {
 }
 
 // === FIX #1: IMAGEN CON RETRY AUTOMÁTICO ===
-// Si la imagen no carga (CDN delay, URL temporal), espera 3s y reintenta una vez.
-// Solo después del retry muestra el mensaje de error.
+// Si la imagen no carga (CDN delay, URL temporal), reintenta hasta 2 veces.
+// Solo después del último retry muestra el mensaje de error.
 
 function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
   const [status, setStatus] = useState<'loading' | 'loaded' | 'retrying' | 'error'>('loading');
   const [imgSrc, setImgSrc] = useState(url);
-  const retried = useRef(false);
+  const retryCount = useRef(0);
+  const maxRetries = 2;
 
   return (
     <span className="block my-3">
@@ -154,16 +155,16 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
             style={{ maxHeight: '400px', objectFit: 'contain' }}
             onLoad={() => setStatus('loaded')}
             onError={() => {
-              if (!retried.current) {
-                // Primer fallo: esperar 3s y reintentar con cache-bust
-                retried.current = true;
+              if (retryCount.current < maxRetries) {
+                retryCount.current += 1;
                 setStatus('retrying');
+                // Delay escalado: 2s, 4s
+                const delay = retryCount.current * 2000;
                 setTimeout(() => {
                   const separator = url.includes('?') ? '&' : '?';
                   setImgSrc(`${url}${separator}_retry=${Date.now()}`);
-                }, 3000);
+                }, delay);
               } else {
-                // Segundo fallo: mostrar error
                 setStatus('error');
               }
             }}
