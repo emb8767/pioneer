@@ -5,8 +5,7 @@
 // 2. ANTES de cada tool: consultar draft-guardian (validateToolCall)
 // 3. DESPUÉS de cada tool: actualizar estado del guardian (updateStateAfterTool)
 // 4. Cuando Claude quiere terminar (end_turn): consultar guardian (validateEndTurn)
-//    - Protección ①: draft sin publish → forzar continuación
-//    - Protección ④: aprobación sin tools → forzar acción (máximo 1 retry)
+//    - Protección ④: aprobación sin tools → forzar acción (máximo 2 retries)
 // 5. Recoger texto acumulado + estado final
 //
 // ESTILO PLC/LADDER: el loop es el scan cycle, el guardian es el interlock
@@ -28,9 +27,9 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Flujo típico: list_accounts → generate_content → generate_image → create_draft → publish_post = 5
-// Con queue setup: +1. Con guardian retry: +1-2. Margen: 10 total.
-const MAX_TOOL_USE_ITERATIONS = 10;
+// Fase 2: Flujo típico: list_accounts → generate_content → generate_image = 3
+// Con queue setup: +1. Con guardian retry: +1-2. Margen: 7 total.
+const MAX_TOOL_USE_ITERATIONS = 7;
 
 // === RESULTADO DEL LOOP ===
 export interface ConversationResult {
@@ -102,7 +101,7 @@ export async function runConversationLoop(
 
       if (!endVerdict.allowed && endVerdict.forceMessage) {
         // Protección ④ tiene límite de 2 retries para evitar loop infinito
-        const isProtection4 = !guardianState.draftCreated && !guardianState.anyToolExecutedInRequest;
+        const isProtection4 = !guardianState.anyToolExecutedInRequest;
 
         if (isProtection4 && approvalForceRetryCount >= 2) {
           // Ya intentamos 2 veces — dejar que Claude termine

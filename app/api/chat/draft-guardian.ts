@@ -1,44 +1,28 @@
-// draft-guardian.ts — Interlock de validación para Draft-First flow
+// draft-guardian.ts — Fase 2: Simplificado
 //
-// PROPÓSITO: Cerrar en CÓDIGO las zonas grises que el system prompt no puede garantizar.
-// Se ejecuta ANTES de cada tool call. Puede BLOQUEAR una tool y devolver un error
-// que Claude recibe como tool_result, forzándolo a corregir su flujo.
+// Con create_draft y publish_post removidos de Claude, las protecciones ①②③ ya no aplican.
+// Lo que queda:
+// - Protección ④: Si el cliente aprueba y Claude no usa NINGUNA tool → forzar generate_content
+// - Tracking de estado: image URLs, content text, platforms → para actionContext de botones
 //
-// === 4 PROTECCIONES ===
-// ① Si create_draft fue llamado y Claude responde sin publish_post → bloquear end_turn
-// ② Si Claude intenta create_draft 2 veces en mismo request → bloquear segundo
-// ③ Si Claude llama generate_content sin haber completado publish_post del draft actual → bloquear
-// ④ Si el cliente aprueba y Claude termina sin usar NINGUNA tool → forzar acción
-//
-// ESTILO PLC/LADDER: entrada clara (toolName + state), salida clara (allow/block + reason)
+// ESTILO PLC/LADDER: entrada clara, salida clara
 
 // === PATRONES DE APROBACIÓN DEL CLIENTE ===
-// Frases que indican que el cliente aprobó algo y Claude DEBE actuar con tools.
 const APPROVAL_PATTERNS = [
-  /^s[ií]$/i,                           // "sí", "si"
-  /^dale$/i,                            // "dale"
-  /^ok$/i,                              // "ok"
-  /^aprobado$/i,                        // "aprobado"
-  /^perfecto$/i,                        // "perfecto"
-  /^adelante$/i,                        // "adelante"
-  /^me gusta$/i,                        // "me gusta"
-  /^está bien$/i,                       // "está bien"
-  /^esta bien$/i,                       // "esta bien"
-  /^publ[ií]calo$/i,                    // "publícalo"
-  /^prog[rá]malo$/i,                    // "prográmalo"
-  /^ok[,.]?\s*dale$/i,                  // "ok, dale" / "ok dale"
-  /^s[ií][,.]?\s*dale$/i,              // "sí, dale" / "si dale"
-  /^s[ií][,.]?\s*aprobado$/i,          // "sí, aprobado"
-  /como\s*(esta|está)\s*en\s*el\s*plan/i, // "como esta en el plan"
-  /seg[úu]n\s*el\s*plan/i,            // "según el plan"
-  /^ahora$/i,                           // "ahora"
-  /^hoy$/i,                             // "hoy"
+  /^s[ií]$/i,
+  /^dale$/i,
+  /^ok$/i,
+  /^aprobado$/i,
+  /^perfecto$/i,
+  /^adelante$/i,
+  /^me gusta$/i,
+  /^está bien$/i,
+  /^esta bien$/i,
+  /^ok[,.]?\s*dale$/i,
+  /^s[ií][,.]?\s*dale$/i,
+  /^s[ií][,.]?\s*aprobado$/i,
 ];
 
-/**
- * Detecta si el último mensaje del usuario es una aprobación.
- * Se usa en Protección ④ para forzar tool_use cuando Claude solo responde texto.
- */
 export function isApprovalMessage(text: string): boolean {
   const trimmed = text.trim();
   return APPROVAL_PATTERNS.some(pattern => pattern.test(trimmed));
@@ -46,21 +30,16 @@ export function isApprovalMessage(text: string): boolean {
 
 // === ESTADO DEL GUARDIAN (por request HTTP) ===
 export interface GuardianState {
-  // Draft tracking
-  draftCreated: boolean;       // true después de create_draft exitoso
-  activeDraftId: string | null; // ID del draft pendiente de publish
-  publishCompleted: boolean;   // true después de publish_post exitoso
-
-  // Image tracking (mantener para inyección UX)
+  // Image tracking (para inyección UX + actionContext)
   generateImageWasCalled: boolean;
   lastGeneratedImageUrls: string[];
 
   // Tool tracking para Protección ④
-  anyToolExecutedInRequest: boolean; // true si al menos 1 tool se ejecutó en este request
+  anyToolExecutedInRequest: boolean;
 
   // Action context tracking (Fase 1B — datos para botones de acción)
-  lastGeneratedContent: string | null;    // Último texto de generate_content
-  lastImagePrompt: string | null;         // Último prompt de generate_image
+  lastGeneratedContent: string | null;
+  lastImagePrompt: string | null;
   connectedPlatforms: Array<{ platform: string; accountId: string }> | null;
 
   // OAuth tracking
@@ -71,9 +50,6 @@ export interface GuardianState {
 
 export function createGuardianState(): GuardianState {
   return {
-    draftCreated: false,
-    activeDraftId: null,
-    publishCompleted: false,
     generateImageWasCalled: false,
     lastGeneratedImageUrls: [],
     anyToolExecutedInRequest: false,
@@ -86,71 +62,26 @@ export function createGuardianState(): GuardianState {
   };
 }
 
-// === RESULTADO DE LA VALIDACIÓN ===
+// === VALIDACIÓN PRE-EJECUCIÓN ===
 export interface GuardianVerdict {
   allowed: boolean;
-  blockReason: string | null; // Mensaje que Claude recibe como tool_result de error
+  blockReason: string | null;
 }
 
 const ALLOW: GuardianVerdict = { allowed: true, blockReason: null };
 
-function block(reason: string): GuardianVerdict {
-  console.log(`[DraftGuardian] ⛔ BLOQUEADO: ${reason}`);
-  return { allowed: false, blockReason: reason };
-}
-
-// === VALIDACIÓN PRE-EJECUCIÓN ===
-// Se llama ANTES de ejecutar cada tool. Decide si la tool puede proceder.
-
 export function validateToolCall(
-  toolName: string,
-  state: GuardianState
+  _toolName: string,
+  _state: GuardianState
 ): GuardianVerdict {
-
-  // ───────────────────────────────────────────────
-  // PROTECCIÓN ②: create_draft duplicado
-  // Si ya hay un draft activo (creado y no publicado), bloquear segundo create_draft
-  // ───────────────────────────────────────────────
-  if (toolName === 'create_draft') {
-    if (state.draftCreated && state.activeDraftId && !state.publishCompleted) {
-      return block(
-        `ERROR: Ya existe un borrador activo (draft_id: ${state.activeDraftId}). ` +
-        `NO puedes crear otro borrador. Tu próxima acción OBLIGATORIA es preguntar al cliente cuándo publicar ` +
-        `y luego llamar publish_post con draft_id: "${state.activeDraftId}". ` +
-        `El flujo correcto es: create_draft (✅ HECHO) → publish_post (⬅️ PENDIENTE).`
-      );
-    }
-  }
-
-  // ───────────────────────────────────────────────
-  // PROTECCIÓN ③: generate_content sin haber publicado draft actual
-  // Si hay un draft creado pendiente de publish, bloquear avance al siguiente post
-  // ───────────────────────────────────────────────
-  if (toolName === 'generate_content') {
-    if (state.draftCreated && state.activeDraftId && !state.publishCompleted) {
-      return block(
-        `ERROR: Hay un borrador pendiente de publicar (draft_id: ${state.activeDraftId}). ` +
-        `NO puedes generar contenido del siguiente post hasta publicar el actual. ` +
-        `Tu próxima acción OBLIGATORIA es llamar publish_post con draft_id: "${state.activeDraftId}". ` +
-        `NUNCA avances al siguiente post sin completar publish_post del actual.`
-      );
-    }
-  }
-
-  // ───────────────────────────────────────────────
-  // Todas las demás tools: PERMITIR
-  // ───────────────────────────────────────────────
+  // Fase 2: Sin create_draft ni publish_post, no hay nada que bloquear
   return ALLOW;
 }
 
 // === VALIDACIÓN END_TURN ===
-// Se llama cuando Claude quiere terminar su turno (stop_reason === 'end_turn').
-// PROTECCIÓN ①: Si hay draft sin publish, inyectar mensaje forzando a Claude a actuar.
-// PROTECCIÓN ④: Si el cliente aprobó y Claude no usó NINGUNA tool, forzar acción.
-
 export interface EndTurnVerdict {
   allowed: boolean;
-  forceMessage: string | null; // Mensaje a inyectar como "user" para forzar continuación
+  forceMessage: string | null;
 }
 
 export function validateEndTurn(
@@ -158,36 +89,21 @@ export function validateEndTurn(
   lastUserMessage: string
 ): EndTurnVerdict {
   // ───────────────────────────────────────────────
-  // PROTECCIÓN ①: Draft creado sin publish
-  // ───────────────────────────────────────────────
-  if (state.draftCreated && state.activeDraftId && !state.publishCompleted) {
-    console.log(`[DraftGuardian] ⛔ END_TURN BLOQUEADO (①): draft ${state.activeDraftId} sin publish`);
-    return {
-      allowed: false,
-      forceMessage:
-        `SISTEMA: Hay un borrador pendiente (draft_id: ${state.activeDraftId}) que NO ha sido publicado. ` +
-        `DEBES preguntar al cliente cuándo desea publicarlo y luego llamar publish_post con ese draft_id. ` +
-        `NO puedes terminar tu turno sin resolver el borrador pendiente.`,
-    };
-  }
-
-  // ───────────────────────────────────────────────
   // PROTECCIÓN ④: Cliente aprobó + Claude no usó tools
-  // Claude respondió solo con texto cuando debió ejecutar una acción.
-  // Esto cierra el Bug 12.5: Claude dice "guardado/programado" sin llamar tools.
+  // Si el cliente dijo "aprobado"/"dale" y Claude solo respondió texto,
+  // forzar a Claude a ejecutar generate_content o generate_image.
   // ───────────────────────────────────────────────
   if (!state.anyToolExecutedInRequest && isApprovalMessage(lastUserMessage)) {
     console.log(`[DraftGuardian] ⛔ END_TURN BLOQUEADO (④): cliente aprobó "${lastUserMessage.trim().substring(0, 30)}" pero Claude no usó ninguna tool`);
     return {
       allowed: false,
       forceMessage:
-        `SISTEMA — ACCIÓN OBLIGATORIA: El cliente dijo "${lastUserMessage.trim()}" aprobando la acción. ` +
+        `SISTEMA — ACCIÓN OBLIGATORIA: El cliente dijo "${lastUserMessage.trim()}" aprobando algo. ` +
         `Respondiste SOLO con texto. Eso es INCORRECTO — debes ejecutar herramientas.\n\n` +
-        `INSTRUCCIONES EXACTAS — haz UNA de estas acciones AHORA:\n` +
-        `• Si el cliente aprobó el texto Y la imagen del post → llama create_draft con el contenido y las media_urls\n` +
-        `• Si el cliente indicó cuándo publicar (ahora, programado, según el plan) → llama create_draft PRIMERO (si no lo has hecho) y luego publish_post\n` +
+        `INSTRUCCIONES:\n` +
         `• Si el cliente aprobó el plan → llama generate_content para el primer post\n` +
-        `• Si el cliente pidió imagen → llama generate_image\n\n` +
+        `• Si el cliente pidió imagen → llama generate_image\n` +
+        `• NO necesitas publicar — el sistema lo hace automáticamente cuando el cliente aprueba la imagen\n\n` +
         `RESPONDE USANDO tool_use. NO respondas con texto solamente.`,
     };
   }
@@ -196,59 +112,16 @@ export function validateEndTurn(
 }
 
 // === ACTUALIZACIÓN DE ESTADO POST-EJECUCIÓN ===
-// Se llama DESPUÉS de ejecutar cada tool exitosamente.
-// Actualiza el estado del guardian basado en los resultados.
 
 export function updateStateAfterTool(
   toolName: string,
   toolResultJson: string,
   state: GuardianState
 ): void {
-
-  // --- Marcar que al menos una tool se ejecutó en este request ---
+  // --- Marcar que al menos una tool se ejecutó ---
   state.anyToolExecutedInRequest = true;
 
-  // --- create_draft exitoso → registrar draft activo ---
-  if (toolName === 'create_draft') {
-    try {
-      const result = JSON.parse(toolResultJson);
-      if (result.success && result.draft_id) {
-        state.draftCreated = true;
-        state.activeDraftId = result.draft_id;
-        state.publishCompleted = false;
-        console.log(`[DraftGuardian] ✅ Draft registrado: ${result.draft_id}`);
-      }
-      // Duplicado también cuenta como "draft existe" si tiene existing_post_id
-      if (result.success && result.duplicate && result.existing_post_id) {
-        state.draftCreated = true;
-        state.activeDraftId = result.existing_post_id;
-        state.publishCompleted = false;
-        console.log(`[DraftGuardian] ✅ Draft duplicado registrado: ${result.existing_post_id}`);
-      }
-    } catch {
-      // No-op: si no se puede parsear, no actualizamos estado
-    }
-  }
-
-  // --- publish_post exitoso → liberar estado para siguiente post ---
-  if (toolName === 'publish_post') {
-    try {
-      const result = JSON.parse(toolResultJson);
-      if (result.success) {
-        state.publishCompleted = true;
-        // Reset para el siguiente post del plan
-        state.draftCreated = false;
-        state.activeDraftId = null;
-        state.generateImageWasCalled = false;
-        state.lastGeneratedImageUrls = [];
-        console.log(`[DraftGuardian] ✅ Publish completado — estado reseteado para siguiente post`);
-      }
-    } catch {
-      // No-op
-    }
-  }
-
-  // --- generate_image → rastrear URLs para inyección UX ---
+  // --- generate_image → rastrear URLs para inyección UX + actionContext ---
   if (toolName === 'generate_image') {
     state.generateImageWasCalled = true;
     try {
@@ -263,22 +136,21 @@ export function updateStateAfterTool(
     }
   }
 
-  // --- generate_content → capturar texto para actionContext (Fase 1B) ---
+  // --- generate_content → capturar texto para actionContext ---
   if (toolName === 'generate_content') {
     try {
       const result = JSON.parse(toolResultJson);
-      if (result.success && result.content) {
-        state.lastGeneratedContent = result.content;
+      // result.content es un objeto { text, hashtags, platform_versions }
+      if (result.content?.text) {
+        state.lastGeneratedContent = result.content.text;
+        console.log(`[DraftGuardian] Content capturado: "${result.content.text.substring(0, 60)}..."`);
       }
     } catch {
       // No-op
     }
   }
 
-  // --- generate_image → capturar prompt para regenerate (Fase 1B) ---
-  // (nota: el prompt viene del input, no del result — lo capturamos en conversation-loop)
-
-  // --- list_connected_accounts → capturar plataformas para actionContext (Fase 1B) ---
+  // --- list_connected_accounts → capturar plataformas para actionContext ---
   if (toolName === 'list_connected_accounts') {
     try {
       const result = JSON.parse(toolResultJson);

@@ -12,7 +12,6 @@ import {
   validateAndPrepareDraft,
   createDraftWithRetry,
   activateDraftWithRetry,
-  stripMarkdown,
 } from '@/lib/publish-validator';
 import { listAccounts, LateApiError, PR_TIMEZONE, getNextOptimalTime } from '@/lib/late-client';
 import { generateImage } from '@/lib/replicate-client';

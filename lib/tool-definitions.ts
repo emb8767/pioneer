@@ -1,7 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 
-// === TOOLS DISPONIBLES PARA CLAUDE (10 tools) ===
-// Cambio Draft-First: nueva tool create_draft, publish_post ahora requiere draft_id
+// === TOOLS DISPONIBLES PARA CLAUDE (7 tools) ===
+// Fase 2: Removidos create_draft y publish_post — ahora ejecutados por action buttons
+// Claude solo razona, genera contenido/imágenes, y conecta cuentas.
+// La publicación la maneja el frontend via /api/chat/action.
 export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'list_connected_accounts',
@@ -115,7 +117,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'generate_image',
     description:
-      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Las imágenes se suben automáticamente a Late.dev y devuelve URLs permanentes (https://media.getlate.dev/...) que se usan en create_draft. Las URLs permanentes NO expiran. NO llames esta tool si ya generaste imágenes para este post — reutiliza las URLs existentes.',
+      'Genera una o más imágenes con inteligencia artificial (FLUX) para acompañar un post de redes sociales. Para carruseles/multi-imagen, usa count > 1 (máximo 10). Cada imagen usa el mismo prompt pero genera variaciones distintas. El prompt DEBE ser en inglés. Las imágenes se suben automáticamente a Late.dev y devuelve URLs permanentes (https://media.getlate.dev/...). Las URLs permanentes NO expiran. DESPUÉS de generar, muestra la imagen al cliente y espera su aprobación — el sistema se encarga de publicar.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -143,89 +145,6 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ['prompt'],
-    },
-  },
-  // === DRAFT-FIRST: Nueva tool ===
-  {
-    name: 'create_draft',
-    description:
-      'Crea un borrador del post en Late.dev con el texto y las imágenes. El borrador NO se publica — queda guardado hasta que el cliente apruebe y se active con publish_post. DEBES llamar esta tool DESPUÉS de que el cliente apruebe el texto y la imagen, ANTES de preguntar cuándo publicar. Retorna un draft_id que publish_post necesita para activar la publicación. El flujo correcto es: generate_content → generate_image → create_draft → cliente dice cuándo → publish_post.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        content: {
-          type: 'string',
-          description: 'El texto del post (de generate_content)',
-        },
-        platforms: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              platform: {
-                type: 'string',
-                enum: [
-                  'facebook', 'instagram', 'linkedin', 'twitter', 'tiktok',
-                  'youtube', 'threads', 'reddit', 'pinterest', 'bluesky',
-                  'googlebusiness', 'telegram', 'snapchat',
-                ],
-              },
-              account_id: {
-                type: 'string',
-                description: 'ID de la cuenta conectada en Late.dev',
-              },
-            },
-            required: ['platform', 'account_id'],
-          },
-          description: 'Lista de plataformas y sus account IDs',
-        },
-        media_urls: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            'URLs de imágenes permanentes de media.getlate.dev obtenidas de generate_image. Opcional para posts sin imagen.',
-        },
-      },
-      required: ['content', 'platforms'],
-    },
-  },
-  // === DRAFT-FIRST: publish_post ahora ACTIVA un draft existente ===
-  {
-    name: 'publish_post',
-    description:
-      'Activa un borrador previamente creado con create_draft. Cambia su estado de "draft" a programado o publicado inmediatamente. REQUIERE draft_id devuelto por create_draft. El flujo correcto es: create_draft (guarda el post) → publish_post (lo activa). Tres modos: (1) publish_now: true para publicar inmediatamente, (2) scheduled_for para fecha específica, (3) use_queue: true para cola automática. NUNCA llames publish_post sin antes haber llamado create_draft.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        draft_id: {
-          type: 'string',
-          description: 'ID del borrador devuelto por create_draft. OBLIGATORIO.',
-        },
-        publish_now: {
-          type: 'boolean',
-          description:
-            'Si es true, publica inmediatamente.',
-        },
-        scheduled_for: {
-          type: 'string',
-          description:
-            'Fecha y hora para programar en formato ISO 8601 (ej: 2026-02-14T12:00:00)',
-        },
-        timezone: {
-          type: 'string',
-          description: 'Zona horaria para la programación',
-        },
-        use_queue: {
-          type: 'boolean',
-          description:
-            'Si es true, agrega a la cola de publicación. Late.dev asigna automáticamente el próximo horario. NO combinar con publish_now o scheduled_for.',
-        },
-        queue_profile_id: {
-          type: 'string',
-          description: 'ID del perfil para el queue. Default: 6984c371b984889d86a8b3d6',
-        },
-      },
-      required: ['draft_id'],
     },
   },
   // === TOOLS: OAuth Headless ===

@@ -1,11 +1,11 @@
-// Ejecutor de tools para Pioneer Agent — Draft-First Flow
+// Ejecutor de tools para Pioneer Agent — Fase 2
 // Llamadas directas a APIs (sin fetch HTTP — regla Vercel serverless)
 //
-// === CAMBIOS Draft-First ===
-// - Nueva tool create_draft: valida → createDraftPost() → retorna draft_id
-// - publish_post ahora ACTIVA un draft existente via PUT /v1/posts/{draft_id}
-// - Firma simplificada: eliminados parámetros de hallucination tracking
-// - Eliminado: auto-inyección de media_urls en retry, bloqueo de regen en retry
+// === TOOLS ACTIVAS (7) ===
+// list_connected_accounts, generate_connect_url, generate_content,
+// generate_image, get_pending_connection, complete_connection, setup_queue
+//
+// create_draft y publish_post removidos — ahora en action-handler.ts (botones de acción)
 
 import {
   listAccounts,
@@ -30,21 +30,14 @@ import {
 } from '@/lib/late-client';
 import { generateContent } from '@/lib/content-generator';
 import { generateImage } from '@/lib/replicate-client';
-import {
-  validateAndPrepareDraft,
-  validateAndPrepareActivation,
-  createDraftWithRetry,
-  activateDraftWithRetry,
-} from '@/lib/publish-validator';
+// Fase 2: validateAndPrepareDraft, createDraftWithRetry, activateDraftWithRetry
+// ahora solo se usan en action-handler.ts (botones de acción)
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform } from '@/lib/types';
 
 // === TIPO DE RETORNO DE executeTool ===
 export interface ToolResult {
   result: string;
-  draftCreated: boolean;      // true si create_draft exitoso — route.ts guarda draft_id
-  draftId: string | null;     // ID del draft creado
-  publishPostCalled: boolean; // true si publish_post (activateDraft) exitoso
   shouldClearOAuthCookie: boolean;
   linkedInDataToCache: Record<string, unknown> | null;
   connectionOptionsToCache: Array<{ id: string; name: string }> | null;
@@ -54,9 +47,6 @@ export interface ToolResult {
 function defaultResult(result: string, overrides?: Partial<ToolResult>): ToolResult {
   return {
     result,
-    draftCreated: false,
-    draftId: null,
-    publishPostCalled: false,
     shouldClearOAuthCookie: false,
     linkedInDataToCache: null,
     connectionOptionsToCache: null,
@@ -230,159 +220,9 @@ export async function executeTool(
       }
 
       // ============================================================
-      // === DRAFT-FIRST: create_draft ===
+      // === DRAFT-FIRST: create_draft y publish_post REMOVIDOS (Fase 2)
+      // === Ahora ejecutados por action buttons via /api/chat/action
       // ============================================================
-
-      case 'create_draft': {
-        const input = toolInput as {
-          content: string;
-          platforms: Array<{ platform: string; account_id: string }>;
-          media_urls?: string[];
-        };
-
-        // === VALIDACIÓN PREVENTIVA ===
-        const validation = await validateAndPrepareDraft(input, generateImageWasCalled);
-
-        if (!validation.success || !validation.data) {
-          return defaultResult(JSON.stringify({
-            success: false,
-            error: validation.error,
-            corrections: validation.corrections,
-          }));
-        }
-
-        if (validation.corrections && validation.corrections.length > 0) {
-          console.log('[Pioneer] Correcciones preventivas en draft:', validation.corrections);
-        }
-
-        // === CREAR DRAFT EN LATE.DEV ===
-        try {
-          const result = await createDraftWithRetry(validation.data);
-
-          if (result.duplicate) {
-            return defaultResult(JSON.stringify({
-              success: true,
-              duplicate: true,
-              message: result.message,
-              existing_post_id: result.post._id,
-              _note_for_pioneer: 'Este contenido ya fue publicado. Informa al cliente que el contenido ya existe y pregunta si desea crear contenido diferente.',
-            }));
-          }
-
-          const draftId = result.post._id;
-          console.log(`[Pioneer] Draft creado exitosamente: ${draftId}`);
-
-          return defaultResult(JSON.stringify({
-            success: true,
-            draft_id: draftId,
-            status: 'draft',
-            message: 'Borrador creado en Late.dev. Ahora pregunta al cliente cuándo desea publicar (ahora, programado, o cola). Luego llama publish_post con el draft_id.',
-            content_preview: validation.data.content.substring(0, 100) + '...',
-            image_included: !!(validation.data.mediaItems && validation.data.mediaItems.length > 0),
-            ...(validation.corrections && validation.corrections.length > 0 && {
-              _corrections: validation.corrections,
-            }),
-          }), {
-            draftCreated: true,
-            draftId,
-          });
-        } catch (draftError) {
-          console.error('[Pioneer] Error creando draft:', draftError);
-
-          const errorMessage =
-            draftError instanceof LateApiError
-              ? `Error de Late.dev (HTTP ${draftError.status}): ${draftError.body}`
-              : draftError instanceof Error
-                ? draftError.message
-                : 'Error desconocido al crear borrador';
-
-          return defaultResult(JSON.stringify({
-            success: false,
-            error: errorMessage,
-            corrections: validation.corrections,
-          }));
-        }
-      }
-
-      // ============================================================
-      // === DRAFT-FIRST: publish_post (activa un draft existente) ===
-      // ============================================================
-
-      case 'publish_post': {
-        const input = toolInput as {
-          draft_id: string;
-          publish_now?: boolean;
-          scheduled_for?: string;
-          timezone?: string;
-          use_queue?: boolean;
-          queue_profile_id?: string;
-        };
-
-        if (!input.draft_id) {
-          return defaultResult(JSON.stringify({
-            success: false,
-            error: 'ERROR: Se requiere draft_id. Debes llamar create_draft PRIMERO para crear el borrador y obtener el draft_id. El flujo correcto es: generate_content → generate_image → create_draft → publish_post.',
-          }));
-        }
-
-        // === VALIDAR DATOS DE ACTIVACIÓN ===
-        const activation = validateAndPrepareActivation(input);
-
-        if (!activation.success || !activation.data) {
-          return defaultResult(JSON.stringify({
-            success: false,
-            error: activation.error,
-          }));
-        }
-
-        // === ACTIVAR DRAFT VIA PUT /v1/posts/{draft_id} ===
-        try {
-          const result = await activateDraftWithRetry(input.draft_id, activation.data);
-
-          let successMessage: string;
-          if (activation.data.queuedFromProfile) {
-            successMessage = 'Post agregado a la cola de publicación. Se publicará automáticamente en el próximo horario disponible.';
-          } else if (activation.data.publishNow) {
-            successMessage = 'Post publicado exitosamente.';
-          } else {
-            successMessage = `Post programado para ${activation.data.scheduledFor}.`;
-          }
-
-          console.log(`[Pioneer] Draft ${input.draft_id} activado exitosamente: ${successMessage}`);
-
-          return defaultResult(JSON.stringify({
-            success: true,
-            message: successMessage,
-            post: result.post,
-            draft_id: input.draft_id,
-            ...(activation.data.queuedFromProfile && {
-              queued: true,
-              queue_profile_id: activation.data.queuedFromProfile,
-            }),
-            ...(activation.data.scheduledFor && {
-              scheduledFor: activation.data.scheduledFor,
-              timezone: activation.data.timezone,
-            }),
-          }), {
-            publishPostCalled: true,
-          });
-        } catch (publishError) {
-          console.error('[Pioneer] Error activando draft:', publishError);
-
-          const errorMessage =
-            publishError instanceof LateApiError
-              ? `Error de Late.dev (HTTP ${publishError.status}): ${publishError.body}`
-              : publishError instanceof Error
-                ? publishError.message
-                : 'Error desconocido al publicar';
-
-          return defaultResult(JSON.stringify({
-            success: false,
-            error: errorMessage,
-            draft_id: input.draft_id,
-          }));
-        }
-      }
 
       // === TOOL: Queue ===
 
