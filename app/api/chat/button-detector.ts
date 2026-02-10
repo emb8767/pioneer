@@ -100,6 +100,10 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   if (numberedOptions.length > 0) {
     console.log(`[ButtonDetector] P6 tail options: ${JSON.stringify(numberedOptions.map(o => ({ n: o.number, t: o.text.slice(0, 50), q: o.fullText.trim().endsWith('?') })))}`);
   }
+  // If 0 options found but text looks like it has numbered items, dump the text
+  if (numberedOptions.length === 0 && /\d+[.)]\s/.test(tail)) {
+    console.log(`[ButtonDetector] P6 DUMP (0 options but has numbered patterns): ${JSON.stringify(tail)}`);
+  }
   if (text.length > 1500) {
     const fullTextOptions = extractNumberedOptions(text);
     console.log(`[ButtonDetector] P6 COMPARE: extractNumberedOptions(FULL) found ${fullTextOptions.length} options (fullLen=${text.length})`);
