@@ -47,6 +47,11 @@ export interface DetectorState {
 // === FUNCIÓN PRINCIPAL ===
 
 export function detectButtons(text: string, state?: DetectorState): ButtonConfig[] | undefined {
+  // === DIAGNOSTIC LOGGING (Bug 1) ===
+  console.log(`[ButtonDetector] === INICIO === textLen=${text.length}, state=${JSON.stringify(state)}`);
+  console.log(`[ButtonDetector] first150: ${JSON.stringify(text.slice(0, 150))}`);
+  console.log(`[ButtonDetector] last150: ${JSON.stringify(text.slice(-150))}`);
+
   // Usar solo las últimas ~1500 chars para detección de preguntas
   const tail = text.length > 1500 ? text.slice(-1500) : text;
 
@@ -55,6 +60,7 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   // → Botones de ACCIÓN: cliente ejecuta generación de imagen
   // ══════════════════════════════════════════════════
   if (state?.describeImageWasCalled && state.hasImageSpec) {
+    console.log(`[ButtonDetector] P1 MATCH: describeImageWasCalled + hasImageSpec`);
     return buildImageGenerateButtons();
   }
 
@@ -64,6 +70,7 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
 
   // 2. Aprobación de plan (ANTES de lista numerada — planes incluyen posts numerados)
   if (/¿desea aprobar|¿aprueba (este|el) plan|¿le parece bien (este|el) plan|aprobar este plan/i.test(tail)) {
+    console.log(`[ButtonDetector] P2 MATCH: plan approval`);
     return buildPlanApprovalButtons();
   }
 
@@ -79,6 +86,7 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
 
   // 5. Oferta de imagen (¿quiere que genere imagen?)
   if (/¿(le gustaría|quiere|desea)\s+(que\s+)?(genere|crear|generar|hacer|prepare|diseñe)\s+(una\s+)?imagen|generar una imagen.*\?|imagen.*para acompañar|imagen.*profesional|preparar.*imagen/i.test(tail)) {
+    console.log(`[ButtonDetector] P5 MATCH: image offer`);
     return buildImageOfferButtons();
   }
 
@@ -87,6 +95,19 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   // FIX #2: Excluir listas donde los items son PREGUNTAS (terminan en ?)
   // ══════════════════════════════════════════════════
   const numberedOptions = extractNumberedOptions(tail);
+  // === P6 DIAGNOSTIC: Compare tail vs full text ===
+  console.log(`[ButtonDetector] P6 CHECK: extractNumberedOptions(tail) found ${numberedOptions.length} options (tailLen=${tail.length})`);
+  if (numberedOptions.length > 0) {
+    console.log(`[ButtonDetector] P6 tail options: ${JSON.stringify(numberedOptions.map(o => ({ n: o.number, t: o.text.slice(0, 50), q: o.fullText.trim().endsWith('?') })))}`);
+  }
+  if (text.length > 1500) {
+    const fullTextOptions = extractNumberedOptions(text);
+    console.log(`[ButtonDetector] P6 COMPARE: extractNumberedOptions(FULL) found ${fullTextOptions.length} options (fullLen=${text.length})`);
+    if (fullTextOptions.length > numberedOptions.length) {
+      console.log(`[ButtonDetector] ⚠️ P6 MISMATCH: full text has MORE options than tail! Missing: ${JSON.stringify(fullTextOptions.filter(fo => !numberedOptions.some(to => to.number === fo.number)).map(o => ({ n: o.number, t: o.text.slice(0, 50) })))}`);
+    }
+  }
+
   if (numberedOptions.length >= 2) {
     // FIX #2: Si la mayoría de items terminan en "?", son preguntas de seguimiento,
     // no opciones seleccionables. No generar botones.
@@ -94,11 +115,14 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
       opt.fullText.trim().endsWith('?')
     ).length;
     const isQuestionList = questionCount > numberedOptions.length / 2;
+    console.log(`[ButtonDetector] P6 questionFilter: ${questionCount}/${numberedOptions.length} end with ?, isQuestionList=${isQuestionList}`);
 
     if (!isQuestionList) {
+      console.log(`[ButtonDetector] P6 MATCH: building ${numberedOptions.length} option buttons`);
       return buildOptionButtons(numberedOptions);
     }
     // Si son preguntas, caemos al flujo normal (texto libre)
+    console.log(`[ButtonDetector] P6 SKIP: question list detected`);
   }
 
   // ══════════════════════════════════════════════════
@@ -162,6 +186,7 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   // ══════════════════════════════════════════════════
   // NO MATCH — sin botones
   // ══════════════════════════════════════════════════
+  console.log(`[ButtonDetector] NO MATCH — sin botones`);
   return undefined;
 }
 
