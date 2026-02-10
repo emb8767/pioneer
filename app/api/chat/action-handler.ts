@@ -118,7 +118,12 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
       };
     }
 
-    const imageUrlsText = allImages.map(url => `${url}`).join('\n\n');
+    // FIX #1: Usar formato markdown explícito ![alt](url) para que el parser
+    // de MessageContent siempre reconozca las URLs como imágenes,
+    // sin depender del regex de bare URLs que puede fallar con paths inesperados.
+    const imageUrlsText = allImages
+      .map(url => `![Imagen generada](${url})`)
+      .join('\n\n');
 
     return {
       success: true,
@@ -301,8 +306,27 @@ function buildNextPostButtons(): ButtonConfig[] {
 
 function formatScheduledTime(isoString: string): string {
   try {
-    const date = new Date(isoString);
-    return date.toLocaleString('es-PR', {
+    // isoString from getNextOptimalTime is a bare datetime like "2026-02-10T12:00:00"
+    // representing PR time. On Vercel (UTC), new Date() would interpret it as UTC.
+    // Since we KNOW it's PR time, we parse the components directly.
+    const match = isoString.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (!match) {
+      return isoString;
+    }
+
+    const [, yearStr, monthStr, dayStr, hourStr, minuteStr] = match;
+    const year = parseInt(yearStr);
+    const month = parseInt(monthStr);
+    const day = parseInt(dayStr);
+    const hour = parseInt(hourStr);
+    const minute = parseInt(minuteStr);
+
+    // Build a Date that represents this PR time correctly
+    // Create in UTC but offset by +4h (PR is UTC-4, no DST)
+    const prToUtcOffset = 4; // hours
+    const utcDate = new Date(Date.UTC(year, month - 1, day, hour + prToUtcOffset, minute));
+
+    return utcDate.toLocaleString('es-PR', {
       weekday: 'long',
       day: 'numeric',
       month: 'long',

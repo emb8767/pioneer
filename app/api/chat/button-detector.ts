@@ -15,7 +15,7 @@
 //  3. Aprobación de texto → [Me gusta] [Cambios]
 //  4. Publicar ahora vs programar → [Ahora] [Según el plan]
 //  5. Oferta de imagen → [Sí, generar] [Sin imagen]
-//  6. Lista numerada (2+ items) → botones por opción + "Otra idea"
+//  6. Lista numerada (2+ items, NO preguntas) → botones por opción + "Otra idea"
 //  7. Preguntas de cantidad (10/15) → [10 básicas] [15 completas]
 //  8. Siguiente post → [Siguiente post] [Terminar]
 //  9. Conectar plataforma → [Sí, conectar] [Solo Facebook]
@@ -84,10 +84,21 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
 
   // ══════════════════════════════════════════════════
   // PRIORIDAD 6: Lista numerada (estrategias, opciones de Claude)
+  // FIX #2: Excluir listas donde los items son PREGUNTAS (terminan en ?)
   // ══════════════════════════════════════════════════
   const numberedOptions = extractNumberedOptions(tail);
   if (numberedOptions.length >= 2) {
-    return buildOptionButtons(numberedOptions);
+    // FIX #2: Si la mayoría de items terminan en "?", son preguntas de seguimiento,
+    // no opciones seleccionables. No generar botones.
+    const questionCount = numberedOptions.filter(opt =>
+      opt.fullText.trim().endsWith('?')
+    ).length;
+    const isQuestionList = questionCount > numberedOptions.length / 2;
+
+    if (!isQuestionList) {
+      return buildOptionButtons(numberedOptions);
+    }
+    // Si son preguntas, caemos al flujo normal (texto libre)
   }
 
   // ══════════════════════════════════════════════════
@@ -155,9 +166,10 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
 }
 
 // === EXTRACTOR DE OPCIONES NUMERADAS ===
+// FIX #2: Ahora retorna fullText (línea completa) para detectar si es pregunta
 
-function extractNumberedOptions(text: string): Array<{ number: number; text: string }> {
-  const options: Array<{ number: number; text: string }> = [];
+function extractNumberedOptions(text: string): Array<{ number: number; text: string; fullText: string }> {
+  const options: Array<{ number: number; text: string; fullText: string }> = [];
   const seen = new Set<string>();
   const lines = text.split('\n');
 
@@ -165,11 +177,14 @@ function extractNumberedOptions(text: string): Array<{ number: number; text: str
     const match = line.match(/^\s*(\d+)[.)]\s+(?:\*\*)?([^—\n*]+)/);
     if (match) {
       const optText = match[2].trim().replace(/\*\*/g, '').replace(/\s*[-–—:]\s*$/, '');
+      // fullText = todo después del número, para detectar si termina en ?
+      const fullText = line.replace(/^\s*\d+[.)]\s+/, '').trim();
       if (optText.length >= 2 && !seen.has(optText.toLowerCase())) {
         seen.add(optText.toLowerCase());
         options.push({
           number: parseInt(match[1]),
           text: optText,
+          fullText,
         });
       }
     }
@@ -182,7 +197,7 @@ function extractNumberedOptions(text: string): Array<{ number: number; text: str
 // BUILDERS DE BOTONES — FLUJO DE PUBLICACIÓN
 // ═══════════════════════════════════════════════════════
 
-function buildOptionButtons(options: Array<{ number: number; text: string }>): ButtonConfig[] {
+function buildOptionButtons(options: Array<{ number: number; text: string; fullText: string }>): ButtonConfig[] {
   const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'];
 
   const buttons: ButtonConfig[] = options.map((opt, i) => {

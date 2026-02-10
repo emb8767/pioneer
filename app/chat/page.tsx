@@ -70,45 +70,13 @@ function MessageContent({ content }: { content: string }) {
         const url = match[2];
         const alt = match[1] || 'Imagen generada';
         parts.push(
-          <span key={`img-${lineIdx}-${match.index}`} className="block my-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={url}
-              alt={alt}
-              className="max-w-full rounded-lg shadow-md"
-              style={{ maxHeight: '400px', objectFit: 'contain' }}
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
-                const fallback = document.createElement('p');
-                fallback.textContent = '⚠️ No se pudo cargar la imagen. La URL puede haber expirado.';
-                fallback.className = 'text-amber-600 text-sm mt-1';
-                target.parentElement?.appendChild(fallback);
-              }}
-            />
-          </span>
+          <ImageWithRetry key={`img-${lineIdx}-${match.index}`} url={url} alt={alt} />
         );
       } else if (match[3]) {
         // Bare image URL
         const url = match[3];
         parts.push(
-          <span key={`bareimg-${lineIdx}-${match.index}`} className="block my-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={url}
-              alt="Imagen generada"
-              className="max-w-full rounded-lg shadow-md"
-              style={{ maxHeight: '400px', objectFit: 'contain' }}
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
-                const fallback = document.createElement('p');
-                fallback.textContent = '⚠️ No se pudo cargar la imagen. La URL puede haber expirado.';
-                fallback.className = 'text-amber-600 text-sm mt-1';
-                target.parentElement?.appendChild(fallback);
-              }}
-            />
-          </span>
+          <ImageWithRetry key={`bareimg-${lineIdx}-${match.index}`} url={url} alt="Imagen generada" />
         );
       } else if (match[4] && match[5]) {
         // Markdown link: [text](url)
@@ -157,6 +125,59 @@ function MessageContent({ content }: { content: string }) {
   }
 
   return <div className="whitespace-pre-wrap">{parts}</div>;
+}
+
+// === FIX #1: IMAGEN CON RETRY AUTOMÁTICO ===
+// Si la imagen no carga (CDN delay, URL temporal), espera 3s y reintenta una vez.
+// Solo después del retry muestra el mensaje de error.
+
+function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'retrying' | 'error'>('loading');
+  const [imgSrc, setImgSrc] = useState(url);
+  const retried = useRef(false);
+
+  return (
+    <span className="block my-3">
+      {status === 'error' ? (
+        <p className="text-amber-600 text-sm mt-1">
+          ⚠️ No se pudo cargar la imagen. La URL puede haber expirado.
+        </p>
+      ) : (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imgSrc}
+            alt={alt}
+            className={`max-w-full rounded-lg shadow-md transition-opacity duration-300 ${
+              status === 'loaded' ? 'opacity-100' : 'opacity-0'
+            }`}
+            style={{ maxHeight: '400px', objectFit: 'contain' }}
+            onLoad={() => setStatus('loaded')}
+            onError={() => {
+              if (!retried.current) {
+                // Primer fallo: esperar 3s y reintentar con cache-bust
+                retried.current = true;
+                setStatus('retrying');
+                setTimeout(() => {
+                  const separator = url.includes('?') ? '&' : '?';
+                  setImgSrc(`${url}${separator}_retry=${Date.now()}`);
+                }, 3000);
+              } else {
+                // Segundo fallo: mostrar error
+                setStatus('error');
+              }
+            }}
+          />
+          {(status === 'loading' || status === 'retrying') && (
+            <div className="flex items-center gap-2 text-gray-400 text-sm py-4">
+              <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              {status === 'retrying' ? 'Reintentando cargar imagen...' : 'Cargando imagen...'}
+            </div>
+          )}
+        </>
+      )}
+    </span>
+  );
 }
 
 // === COMPONENTE DE BOTONES ===
@@ -256,8 +277,7 @@ export default function ChatPage() {
       window.history.replaceState({}, '', newUrl);
 
       const platformName = getPlatformDisplayName(pendingPlatform);
-      const autoMessage = `Acabo de autorizar ${platformName}.
-Necesito completar la conexión.`;
+      const autoMessage = `Acabo de autorizar ${platformName}.\nNecesito completar la conexión.`;
 
       setTimeout(() => {
         sendAutoMessage(autoMessage);

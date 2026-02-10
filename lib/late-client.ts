@@ -500,10 +500,20 @@ export function getNextOptimalTime(): string {
     }
   }
 
+  // FIX #5: Calcular la fecha objetivo usando aritmética de días en la misma
+  // zona PR. Construimos la fecha con new Date(year, month-1, day+daysToAdd)
+  // que usa la timezone del servidor (UTC en Vercel). Pero como enviamos
+  // timezone=America/Puerto_Rico junto con este string, Late.dev interpreta
+  // el datetime como hora PR. Lo importante es que el string represente
+  // la hora PR deseada, NO UTC.
   const target = new Date(year, month - 1, dayNum + daysToAdd);
   const pad = (n: number) => n.toString().padStart(2, '0');
 
-  return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(targetHour)}:00:00`;
+  const scheduledTime = `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(targetHour)}:00:00`;
+
+  console.log(`[Pioneer] getNextOptimalTime: PR now=${get('weekday')} ${get('hour')}:${get('minute')}, target=${scheduledTime} (PR timezone)`);
+
+  return scheduledTime;
 }
 
 export const PR_TIMEZONE = 'America/Puerto_Rico';
