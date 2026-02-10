@@ -26,11 +26,69 @@ import {
   saveSnapchatProfile,
   // Queue functions
   setupQueueSlots,
-  getQueueNextSlot,
 } from '@/lib/late-client';
 import { generateContent } from '@/lib/content-generator';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform } from '@/lib/types';
+
+// === CALCULAR PRÓXIMAS FECHAS DE SLOTS ===
+// Dado un array de slots semanales y un conteo de posts,
+// calcula las próximas N fechas reales de publicación.
+function calculateUpcomingSlotDates(
+  slots: Array<{ dayOfWeek: number; time: string }>,
+  postCount: number,
+  timezone: string
+): Array<{ date: string; dayName: string; time: string }> {
+  const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const results: Array<{ date: string; dayName: string; time: string }> = [];
+
+  // Obtener fecha/hora actual en la timezone de PR
+  const nowStr = new Date().toLocaleString('en-US', { timeZone: timezone });
+  const now = new Date(nowStr);
+
+  // Ordenar slots por día de la semana
+  const sortedSlots = [...slots].sort((a, b) => a.dayOfWeek - b.dayOfWeek);
+
+  // Iterar semanas hasta tener suficientes fechas
+  let weekOffset = 0;
+  while (results.length < postCount && weekOffset < 10) {
+    for (const slot of sortedSlots) {
+      if (results.length >= postCount) break;
+
+      // Calcular la fecha de este slot
+      const candidate = new Date(now);
+      const currentDay = candidate.getDay();
+      let daysUntilSlot = slot.dayOfWeek - currentDay + (weekOffset * 7);
+      if (weekOffset === 0 && daysUntilSlot < 0) continue; // Ya pasó esta semana
+
+      candidate.setDate(candidate.getDate() + daysUntilSlot);
+
+      // Establecer la hora del slot
+      const [hours, minutes] = slot.time.split(':').map(Number);
+      candidate.setHours(hours, minutes, 0, 0);
+
+      // Si es hoy pero la hora ya pasó, skip
+      if (candidate <= now) continue;
+
+      // Formatear fecha legible
+      const dateStr = candidate.toLocaleDateString('es-PR', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        timeZone: timezone,
+      });
+
+      results.push({
+        date: dateStr,
+        dayName: days[slot.dayOfWeek],
+        time: slot.time.replace(':00', ':00') + (hours >= 12 ? ' PM' : ' AM'),
+      });
+    }
+    weekOffset++;
+  }
+
+  return results;
+}
 
 // === TIPO DE RETORNO DE executeTool ===
 export interface ToolResult {
@@ -150,6 +208,7 @@ export async function executeTool(
       case 'setup_queue': {
         const input = toolInput as {
           slots: Array<{ day_of_week: number; time: string }>;
+          post_count?: number;
           profile_id?: string;
         };
 
@@ -163,23 +222,21 @@ export async function executeTool(
 
           await setupQueueSlots(profileId, PR_TIMEZONE, formattedSlots, true);
 
-          let nextSlotInfo = '';
-          try {
-            const nextSlot = await getQueueNextSlot(profileId);
-            nextSlotInfo = ` Próximo horario disponible: ${nextSlot.nextSlot}`;
-          } catch {
-            // No-op: info opcional
-          }
+          // Calcular las próximas N fechas reales basándose en los slots configurados
+          const postCount = input.post_count || formattedSlots.length;
+          const upcomingDates = calculateUpcomingSlotDates(formattedSlots, postCount, PR_TIMEZONE);
 
           const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
           const slotDescriptions = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`);
 
           return defaultResult(JSON.stringify({
             success: true,
-            message: `Cola de publicación configurada: ${slotDescriptions.join(', ')}.${nextSlotInfo}`,
+            message: `Cola de publicación configurada: ${slotDescriptions.join(', ')}.`,
             slots: formattedSlots,
             timezone: PR_TIMEZONE,
             profile_id: profileId,
+            upcoming_dates: upcomingDates,
+            instructions: 'USA estas fechas exactas en el plan. Son las fechas REALES en que se publicarán los posts. NO inventes otras fechas.',
           }));
         } catch (error) {
           console.error('[Pioneer] Error configurando queue:', error);

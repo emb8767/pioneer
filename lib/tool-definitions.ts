@@ -205,7 +205,7 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'setup_queue',
     description:
-      'Configura los horarios recurrentes de publicación para el cliente. Los horarios se repiten semanalmente. Solo necesita configurarse una vez por plan.',
+      'Configura los horarios recurrentes de publicación para el cliente. Los horarios se repiten semanalmente. Devuelve las fechas REALES de los próximos posts para incluirlas en el plan.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -227,12 +227,16 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
           },
           description: 'Lista de horarios semanales de publicación.',
         },
+        post_count: {
+          type: 'number',
+          description: 'Cantidad de posts en el plan. Se usa para calcular las fechas exactas de publicación.',
+        },
         profile_id: {
           type: 'string',
           description: 'ID del perfil en Late.dev. Default: 6984c371b984889d86a8b3d6',
         },
       },
-      required: ['slots'],
+      required: ['slots', 'post_count'],
     },
   },
 ];
