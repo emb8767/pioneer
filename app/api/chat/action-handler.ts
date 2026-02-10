@@ -62,6 +62,9 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
     case 'regenerate_image':
       return handleGenerateImage(req.params);
 
+    case 'approve_text':
+      return handleApproveText(req.params);
+
     default:
       return {
         success: false,
@@ -69,6 +72,63 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
         error: `unknown_action: ${req.action}`,
       };
   }
+}
+
+// === APPROVE TEXT (texto aprobado → mostrar botones de imagen) ===
+// No pasa por Claude. Directamente muestra opciones de imagen.
+
+async function handleApproveText(params: ActionRequest['params']): Promise<ActionResponse> {
+  const hasImageSpec = !!(params.imagePrompt);
+
+  if (hasImageSpec) {
+    return {
+      success: true,
+      message: '✅ Texto aprobado. ¿Desea generar una imagen para acompañar el post?',
+      buttons: [
+        {
+          id: 'gen_image',
+          label: '🎨 Generar imagen',
+          type: 'action',
+          style: 'primary',
+          action: 'generate_image',
+        },
+        {
+          id: 'skip_image',
+          label: '⭕ Sin imagen, publicar',
+          type: 'action',
+          style: 'ghost',
+          action: 'publish_no_image',
+        },
+      ],
+      actionContext: {
+        content: params.content,
+        platforms: params.platforms,
+        imagePrompt: params.imagePrompt,
+        imageModel: params.imageModel,
+        imageAspectRatio: params.imageAspectRatio,
+        imageCount: params.imageCount,
+      },
+    };
+  }
+
+  // Sin imageSpec — publicar directamente sin imagen
+  return {
+    success: true,
+    message: '✅ Texto aprobado.',
+    buttons: [
+      {
+        id: 'publish_now',
+        label: '👍 Publicar',
+        type: 'action',
+        style: 'primary',
+        action: 'publish_no_image',
+      },
+    ],
+    actionContext: {
+      content: params.content,
+      platforms: params.platforms,
+    },
+  };
 }
 
 // === GENERATE IMAGE (nueva acción principal — antes era tool de Claude) ===

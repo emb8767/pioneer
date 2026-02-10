@@ -114,39 +114,6 @@ export const PIONEER_TOOLS: Anthropic.Tool[] = [
       ],
     },
   },
-  {
-    name: 'describe_image',
-    description:
-      'Describe la imagen que se debe generar para acompañar un post. TÚ NO generas la imagen — solo describes qué imagen crear. El sistema mostrará un botón al cliente para que ejecute la generación. El prompt DEBE ser en inglés. Después de llamar esta tool, presenta la descripción al cliente y ESPERA — el sistema muestra botones automáticamente.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        prompt: {
-          type: 'string',
-          description:
-            'Descripción de la imagen a generar. DEBE ser en inglés. Ejemplo: "professional photograph, fresh artisan bread on rustic wooden table, warm lighting, bakery, appetizing, no text overlay"',
-        },
-        model: {
-          type: 'string',
-          enum: ['schnell', 'pro'],
-          description:
-            'Modelo a usar. schnell = rápido y barato ($0.015/img), pro = mejor calidad ($0.275/img). Default: schnell.',
-        },
-        aspect_ratio: {
-          type: 'string',
-          enum: ['1:1', '16:9', '21:9', '2:3', '3:2', '4:5', '5:4', '9:16', '9:21'],
-          description:
-            'Aspect ratio. Instagram: 4:5, Facebook: 1:1, Twitter: 16:9, TikTok: 9:16. Multi-plataforma: 1:1.',
-        },
-        count: {
-          type: 'number',
-          description:
-            'Cantidad de imágenes (1-10). Usar > 1 para carruseles. Cada imagen cuesta $0.015 (schnell). Default: 1.',
-        },
-      },
-      required: ['prompt'],
-    },
-  },
   // === TOOLS: OAuth Headless ===
   {
     name: 'get_pending_connection',

@@ -105,8 +105,8 @@ export function validateEndTurn(
         `Respondiste SOLO con texto. Eso es INCORRECTO — debes ejecutar herramientas.\n\n` +
         `INSTRUCCIONES:\n` +
         `• Si el cliente aprobó el plan → llama generate_content para el primer post\n` +
-        `• Si el cliente aprobó el texto y quiere imagen → llama describe_image\n` +
-        `• NO necesitas generar imágenes ni publicar — el sistema lo hace automáticamente cuando el cliente ejecuta acciones\n\n` +
+        `• Si el cliente aprobó las estrategias → llama setup_queue y luego diseña el plan\n` +
+        `• NO necesitas hacer nada con imágenes — el sistema lo maneja automáticamente\n\n` +
         `RESPONDE USANDO tool_use. NO respondas con texto solamente.`,
     };
   }
@@ -124,13 +124,19 @@ export function updateStateAfterTool(
   // --- Marcar que al menos una tool se ejecutó ---
   state.anyToolExecutedInRequest = true;
 
-  // --- generate_content → capturar texto para actionContext ---
+  // --- generate_content → capturar texto + imageSpec para actionContext ---
   if (toolName === 'generate_content') {
     try {
       const result = JSON.parse(toolResultJson);
       if (result.content?.text) {
         state.lastGeneratedContent = result.content.text;
         console.log(`[DraftGuardian] Content capturado: "${result.content.text.substring(0, 60)}..."`);
+      }
+      // generate_content ahora también devuelve imageSpec
+      if (result.imageSpec) {
+        state.describeImageWasCalled = true; // Reutilizar flag para que button-detector sepa
+        state.lastImageSpec = result.imageSpec;
+        console.log(`[DraftGuardian] ImageSpec capturado (auto): prompt="${result.imageSpec.prompt.substring(0, 60)}...", model=${result.imageSpec.model}`);
       }
     } catch {
       // No-op

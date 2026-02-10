@@ -333,7 +333,7 @@ function buildOptionButtons(options: Array<{ number: number; text: string; fullT
 
 function buildTextApprovalButtons(): ButtonConfig[] {
   return [
-    { id: 'approve_text', label: '✅ Me gusta', type: 'option', style: 'primary', chatMessage: 'Me gusta el texto' },
+    { id: 'approve_text', label: '✅ Me gusta', type: 'action', style: 'primary', action: 'approve_text' },
     { id: 'change_text', label: '✏️ Pedir cambios', type: 'option', style: 'ghost', chatMessage: '' },
   ];
 }

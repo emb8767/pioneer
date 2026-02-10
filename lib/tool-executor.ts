@@ -1,12 +1,13 @@
 // Ejecutor de tools para Pioneer Agent — Fase 3
 // Llamadas directas a APIs (sin fetch HTTP — regla Vercel serverless)
 //
-// === TOOLS ACTIVAS (7) ===
+// === TOOLS ACTIVAS (6) ===
 // list_connected_accounts, generate_connect_url, generate_content,
-// describe_image, get_pending_connection, complete_connection, setup_queue
+// get_pending_connection, complete_connection, setup_queue
 //
+// describe_image → ELIMINADO (Fase 4: imageSpec se genera dentro de generate_content)
 // generate_image, create_draft, publish_post → movidos a action-handler.ts (botones de acción)
-// Claude solo DISEÑA. El cliente EJECUTA.
+// Claude solo PIENSA. Los botones EJECUTAN.
 
 import {
   listAccounts,
@@ -173,34 +174,6 @@ export async function executeTool(
           include_hashtags: input.include_hashtags !== false,
         });
         return defaultResult(JSON.stringify(result));
-      }
-
-      case 'describe_image': {
-        // Fase 3: Claude NO genera la imagen — solo describe qué generar.
-        // Retorna la spec como JSON. El sistema muestra botones para que el cliente ejecute.
-        const input = toolInput as {
-          prompt: string;
-          model?: string;
-          aspect_ratio?: string;
-          count?: number;
-        };
-
-        const spec = {
-          prompt: input.prompt,
-          model: input.model || 'schnell',
-          aspect_ratio: input.aspect_ratio || '1:1',
-          count: input.count || 1,
-        };
-
-        const costPerImage = spec.model === 'pro' ? 0.275 : 0.015;
-        const totalCost = costPerImage * spec.count;
-
-        return defaultResult(JSON.stringify({
-          success: true,
-          image_spec: spec,
-          estimated_cost: `$${totalCost.toFixed(3)}`,
-          _note_for_pioneer: `Imagen descrita exitosamente. Presenta la descripción al cliente. El sistema mostrará botones [🎨 Generar imagen] [⭕ Sin imagen] automáticamente. NO intentes generar la imagen tú mismo.`,
-        }));
       }
 
       // === TOOL: Queue ===

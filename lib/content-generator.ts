@@ -130,6 +130,12 @@ export interface GenerateContentResult {
     post_type: string;
     estimated_cost: number;
   };
+  imageSpec?: {
+    prompt: string;
+    model: 'schnell' | 'pro';
+    aspect_ratio: string;
+    count: number;
+  };
 }
 
 /**
@@ -212,6 +218,36 @@ Responde SOLO con el texto del post, nada más. Sin explicaciones, sin comillas,
   // Costo: $0.01 por generación (markup 500% sobre ~$0.002)
   const estimatedCost = contentRequest.platforms.length * 0.01;
 
+  // === GENERAR PROMPT DE IMAGEN AUTOMÁTICAMENTE ===
+  // Claude genera un prompt en inglés para Replicate/FLUX basado en el texto del post
+  let imagePrompt: string | null = null;
+  try {
+    const imagePromptResponse = await anthropic.messages.create({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 200,
+      system: `You generate image prompts for FLUX (Replicate) to create social media marketing images.
+Rules:
+- Output ONLY the prompt, nothing else. No quotes, no explanation.
+- Always in English.
+- Always end with "no text overlay" (FLUX is bad at text).
+- Style: professional, vibrant, high quality, social media ready.
+- Keep it under 100 words.`,
+      messages: [{
+        role: 'user',
+        content: `Generate an image prompt for this social media post by "${contentRequest.business_name}" (${contentRequest.business_type}):\n\n${mainText}`,
+      }],
+    });
+
+    const imgBlock = imagePromptResponse.content[0];
+    if (imgBlock.type === 'text') {
+      imagePrompt = imgBlock.text.trim();
+      console.log(`[Pioneer ContentGen] Image prompt generated: "${imagePrompt.substring(0, 80)}..."`);
+    }
+  } catch (err) {
+    console.warn(`[Pioneer ContentGen] Failed to generate image prompt: ${err instanceof Error ? err.message : 'unknown'}`);
+    // Non-fatal — image prompt is optional
+  }
+
   return {
     content: {
       text: mainText,
@@ -222,5 +258,11 @@ Responde SOLO con el texto del post, nada más. Sin explicaciones, sin comillas,
       post_type: mappedPostType,
       estimated_cost: estimatedCost,
     },
+    imageSpec: imagePrompt ? {
+      prompt: imagePrompt,
+      model: 'schnell' as const,
+      aspect_ratio: '1:1' as const,
+      count: 1,
+    } : undefined,
   };
 }
