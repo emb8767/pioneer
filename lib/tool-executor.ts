@@ -183,14 +183,15 @@ export async function executeTool(
 
         // === DB: Crear post en la base de datos ===
         let postId: string | null = null;
+        console.log(`[Pioneer DB] generate_content: sessionId=${sessionId || 'null'}, hasText=${!!result.content?.text}`);
         if (sessionId && result.content?.text) {
           try {
-            // Buscar plan activo de esta sesión
             const activePlan = await getActivePlan(sessionId);
+            console.log(`[Pioneer DB] getActivePlan: ${activePlan ? `id=${activePlan.id}, status=${activePlan.status}` : 'NOT FOUND'}`);
             if (activePlan) {
-              // Contar posts existentes para determinar order_num
               const existingPosts = await getPostsByPlan(activePlan.id);
               const orderNum = existingPosts.length + 1;
+              console.log(`[Pioneer DB] Creating post order=${orderNum} for plan=${activePlan.id}`);
 
               const dbPost = await createPost(activePlan.id, {
                 order_num: orderNum,
@@ -202,11 +203,10 @@ export async function executeTool(
               postId = dbPost.id;
               console.log(`[Pioneer DB] Post creado: ${postId} (order: ${orderNum}, plan: ${activePlan.id})`);
             } else {
-              console.warn(`[Pioneer DB] No hay plan activo para sessionId=${sessionId} — post no guardado en DB`);
+              console.error(`[Pioneer DB] NO HAY PLAN ACTIVO para sessionId=${sessionId} — post NO guardado en DB`);
             }
           } catch (dbErr) {
             console.error('[Pioneer DB] Error creando post:', dbErr);
-            // No bloquear el flujo — el post se puede publicar sin DB
           }
         }
 

@@ -1,14 +1,15 @@
-// action-handler.ts — Fase DB-1: Lee content de DB, elimina Bug 5 de raíz
+// action-handler.ts — DB-first: Lee TODO de la base de datos
+//
+// PRINCIPIO: El frontend solo envía sessionId + planId + postId.
+// Content, imageSpec, platforms, counter — TODO viene de DB.
+// Bug 5 es IMPOSIBLE porque content nunca viaja por el frontend.
 //
 // RESPONSABILIDADES:
-// 1. approve_text: lee content de DB por postId, muestra botones de imagen
-// 2. generate_image: genera imagen con Replicate, actualiza image_url en DB
-// 3. approve_and_publish: lee content de DB, crea draft, activa con queue, incrementa counter en DB
-// 4. publish_no_image: igual que approve_and_publish sin media
-// 5. regenerate_image: genera nueva imagen con mismo spec
-//
-// PRINCIPIO: Claude DISEÑA. El CLIENTE EJECUTA.
-// DB es fuente de verdad para content y counter — Bug 5 IMPOSIBLE.
+// 1. approve_text: lee post de DB, muestra botones de imagen
+// 2. generate_image: genera imagen, guarda URL en DB
+// 3. approve_and_publish: lee content+image de DB, publica, incrementa counter en DB
+// 4. publish_no_image: igual sin media
+// 5. regenerate_image: nueva imagen con spec de DB
 
 import {
   validateAndPrepareDraft,
@@ -17,7 +18,15 @@ import {
 } from '@/lib/publish-validator';
 import { listAccounts, LateApiError, PR_TIMEZONE } from '@/lib/late-client';
 import { generateImage } from '@/lib/replicate-client';
-import { getPost, updatePost, incrementPostsPublished, markPostScheduled } from '@/lib/db';
+import {
+  getPost,
+  updatePost,
+  getActivePlan,
+  getPostsByPlan,
+  incrementPostsPublished,
+  markPostScheduled,
+  getPlanProgress,
+} from '@/lib/db';
 import type { ButtonConfig } from './button-detector';
 
 // === TIPOS ===
@@ -25,24 +34,15 @@ import type { ButtonConfig } from './button-detector';
 export interface ActionRequest {
   action: string;
   params: {
-    // DB IDs (Fase DB-1) — fuente principal
+    // DB IDs — esto es TODO lo que el frontend necesita enviar
     postId?: string;
     planId?: string;
     sessionId?: string;
-    // Legacy fields (fallback si DB no tiene datos)
-    content?: string;
+    // imageUrls solo vive en el flujo generate_image → approve_and_publish (mismo request chain)
     imageUrls?: string[];
-    platforms?: Array<{ platform: string; accountId: string }>;
+    // Scheduling overrides (futuro)
     scheduledFor?: string;
     publishNow?: boolean;
-    // Image spec (from generate_content auto image prompt)
-    imagePrompt?: string;
-    imageModel?: string;
-    imageAspectRatio?: string;
-    imageCount?: number;
-    // Legacy post counter (fallback)
-    planPostCount?: number;
-    postsPublished?: number;
   };
 }
 
@@ -54,49 +54,67 @@ export interface ActionResponse {
   error?: string;
 }
 
-// === HELPER: Resolver content — DB first, fallback a params ===
-async function resolveContent(params: ActionRequest['params']): Promise<string | null> {
-  // DB first
+// === HELPER: Resolver post — DB es la fuente de verdad ===
+async function resolvePost(params: ActionRequest['params']) {
+  // 1. Directo por postId
   if (params.postId) {
-    try {
-      const post = await getPost(params.postId);
-      if (post?.content) {
-        console.log(`[Pioneer Action] Content de DB (postId: ${params.postId}): "${post.content.substring(0, 80)}..."`);
-        return post.content;
-      }
-    } catch (err) {
-      console.error(`[Pioneer Action] Error leyendo post de DB:`, err);
+    const post = await getPost(params.postId);
+    if (post) {
+      console.log(`[Pioneer Action] Post resuelto por postId: ${post.id} (order: ${post.order_num}, status: ${post.status})`);
+      return post;
+    }
+    console.warn(`[Pioneer Action] postId ${params.postId} no encontrado en DB`);
+  }
+
+  // 2. Buscar por planId — el post más reciente con content que no ha sido publicado
+  if (params.planId) {
+    const posts = await getPostsByPlan(params.planId);
+    const pending = posts.filter(p =>
+      p.content && ['content_ready', 'image_ready'].includes(p.status)
+    );
+    if (pending.length > 0) {
+      const post = pending[pending.length - 1];
+      console.log(`[Pioneer Action] Post resuelto por planId fallback: ${post.id} (order: ${post.order_num})`);
+      return post;
     }
   }
-  // Fallback a params (legacy)
-  if (params.content) {
-    console.log(`[Pioneer Action] Content de params (legacy): "${params.content.substring(0, 80)}..."`);
-    return params.content;
+
+  // 3. Buscar por sessionId → plan activo → post pendiente
+  if (params.sessionId) {
+    const plan = await getActivePlan(params.sessionId);
+    if (plan) {
+      const posts = await getPostsByPlan(plan.id);
+      const pending = posts.filter(p =>
+        p.content && ['content_ready', 'image_ready'].includes(p.status)
+      );
+      if (pending.length > 0) {
+        const post = pending[pending.length - 1];
+        console.log(`[Pioneer Action] Post resuelto por sessionId fallback: ${post.id} (order: ${post.order_num})`);
+        return post;
+      }
+    }
   }
+
+  console.error(`[Pioneer Action] No se pudo resolver post. postId=${params.postId}, planId=${params.planId}, sessionId=${params.sessionId}`);
   return null;
 }
 
 // === DISPATCHER ===
 
 export async function handleAction(req: ActionRequest): Promise<ActionResponse> {
-  console.log(`[Pioneer Action] Ejecutando: ${req.action} (postId: ${req.params.postId || 'none'}, planId: ${req.params.planId || 'none'})`);
+  console.log(`[Pioneer Action] Ejecutando: ${req.action} (postId: ${req.params.postId || 'none'}, planId: ${req.params.planId || 'none'}, sessionId: ${req.params.sessionId || 'none'})`);
 
   switch (req.action) {
-    case 'generate_image':
-      return handleGenerateImage(req.params);
-
-    case 'approve_and_publish':
-      return handleApproveAndPublish(req.params);
-
-    case 'publish_no_image':
-      return handleApproveAndPublish({ ...req.params, imageUrls: [] });
-
-    case 'regenerate_image':
-      return handleGenerateImage(req.params);
-
     case 'approve_text':
       return handleApproveText(req.params);
-
+    case 'generate_image':
+      return handleGenerateImage(req.params);
+    case 'approve_and_publish':
+      return handleApproveAndPublish(req.params);
+    case 'publish_no_image':
+      return handleApproveAndPublish({ ...req.params, imageUrls: [] });
+    case 'regenerate_image':
+      return handleGenerateImage(req.params);
     default:
       return {
         success: false,
@@ -106,180 +124,101 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
   }
 }
 
-// === APPROVE TEXT (texto aprobado → mostrar botones de imagen) ===
-// No pasa por Claude. Directamente muestra opciones de imagen.
+// === APPROVE TEXT ===
+// Lee post de DB. Si tiene image_prompt → botones de imagen. Si no → publicar directo.
 
 async function handleApproveText(params: ActionRequest['params']): Promise<ActionResponse> {
-  const hasImageSpec = !!(params.imagePrompt);
+  const post = await resolvePost(params);
 
-  if (hasImageSpec) {
+  if (!post) {
+    return { success: false, message: 'Error: no se encontró el post en la base de datos.', error: 'post_not_found' };
+  }
+
+  console.log(`[Pioneer Action] approve_text: post=${post.id}, content="${post.content?.substring(0, 60)}...", hasImagePrompt=${!!post.image_prompt}`);
+
+  const ctx = {
+    postId: post.id,
+    planId: post.plan_id,
+    sessionId: params.sessionId,
+  };
+
+  if (post.image_prompt) {
     return {
       success: true,
       message: '✅ Texto aprobado. ¿Desea generar una imagen para acompañar el post?',
       buttons: [
-        {
-          id: 'gen_image',
-          label: '🎨 Generar imagen',
-          type: 'action',
-          style: 'primary',
-          action: 'generate_image',
-        },
-        {
-          id: 'skip_image',
-          label: '⭕ Sin imagen, publicar',
-          type: 'action',
-          style: 'ghost',
-          action: 'publish_no_image',
-        },
+        { id: 'gen_image', label: '🎨 Generar imagen', type: 'action', style: 'primary', action: 'generate_image' },
+        { id: 'skip_image', label: '⭕ Sin imagen, publicar', type: 'action', style: 'ghost', action: 'publish_no_image' },
       ],
-      actionContext: {
-        // DB IDs propagados
-        postId: params.postId,
-        planId: params.planId,
-        sessionId: params.sessionId,
-        // Content como fallback (DB es fuente de verdad via postId)
-        content: params.content,
-        // Image spec para generate_image
-        imagePrompt: params.imagePrompt,
-        imageModel: params.imageModel,
-        imageAspectRatio: params.imageAspectRatio,
-        imageCount: params.imageCount,
-        // Legacy fields (platforms fallback)
-        platforms: params.platforms,
-      },
+      actionContext: ctx,
     };
   }
 
-  // Sin imageSpec — publicar directamente sin imagen
   return {
     success: true,
     message: '✅ Texto aprobado.',
     buttons: [
-      {
-        id: 'publish_now',
-        label: '👍 Publicar',
-        type: 'action',
-        style: 'primary',
-        action: 'publish_no_image',
-      },
+      { id: 'publish_now', label: '👍 Publicar', type: 'action', style: 'primary', action: 'publish_no_image' },
     ],
-    actionContext: {
-      postId: params.postId,
-      planId: params.planId,
-      sessionId: params.sessionId,
-      content: params.content,
-      platforms: params.platforms,
-    },
+    actionContext: ctx,
   };
 }
 
-// === GENERATE IMAGE (nueva acción principal — antes era tool de Claude) ===
-// Flujo: Replicate genera → valida URL → sube a Late.dev → URL permanente
+// === GENERATE IMAGE ===
+// Lee image_prompt de DB. Genera con Replicate. Guarda URL en DB.
 
 async function handleGenerateImage(params: ActionRequest['params']): Promise<ActionResponse> {
-  const { imagePrompt, imageModel, imageAspectRatio, imageCount } = params;
+  const post = await resolvePost(params);
 
-  if (!imagePrompt) {
+  if (!post || !post.image_prompt) {
     return { success: false, message: 'Error: no hay prompt de imagen.', error: 'missing_prompt' };
   }
 
-  const model = (imageModel as 'schnell' | 'pro') || 'schnell';
-  const aspect_ratio = (imageAspectRatio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1';
-  const count = imageCount || 1;
+  const model = (post.image_model as 'schnell' | 'pro') || 'schnell';
+  const aspect_ratio = (post.image_aspect_ratio as '1:1' | '16:9' | '21:9' | '2:3' | '3:2' | '4:5' | '5:4' | '9:16' | '9:21') || '1:1';
 
   try {
-    // Para carruseles (count > 1), generar secuencialmente con delay (Replicate free plan)
-    const allImages: string[] = [];
-    const errors: string[] = [];
+    const result = await generateImage({
+      prompt: post.image_prompt,
+      model,
+      aspect_ratio,
+      num_outputs: 1,
+    });
 
-    for (let i = 0; i < count; i++) {
-      if (i > 0) {
-        console.log(`[Pioneer Action] Esperando 10s antes de generar imagen ${i + 1}/${count}...`);
-        await new Promise(resolve => setTimeout(resolve, 10_000));
-      }
-
-      const result = await generateImage({
-        prompt: imagePrompt,
-        model,
-        aspect_ratio,
-        num_outputs: 1,
-      });
-
-      if (result.success && result.images && result.images.length > 0) {
-        allImages.push(...result.images);
-      } else {
-        errors.push(`Imagen ${i + 1}: ${result.error || 'Error desconocido'}`);
-      }
-    }
-
-    if (allImages.length === 0) {
+    if (!result.success || !result.images || result.images.length === 0) {
       return {
         success: false,
-        message: `Error generando imagen: ${errors[0] || 'Sin resultado'}`,
+        message: `Error generando imagen: ${result.error || 'Sin resultado'}`,
         error: 'image_error',
       };
     }
 
-    // DB: Actualizar image_url en el post
-    if (params.postId) {
-      try {
-        await updatePost(params.postId, {
-          image_url: allImages[0], // Primera imagen como principal
-          status: 'image_ready',
-        });
-        console.log(`[Pioneer DB] Post ${params.postId} actualizado con image_url`);
-      } catch (dbErr) {
-        console.error('[Pioneer DB] Error actualizando image_url:', dbErr);
-      }
+    const imageUrl = result.images[0];
+
+    // Guardar URL en DB
+    try {
+      await updatePost(post.id, { image_url: imageUrl, status: 'image_ready' });
+      console.log(`[Pioneer DB] Post ${post.id} actualizado con image_url`);
+    } catch (dbErr) {
+      console.error('[Pioneer DB] Error actualizando image_url:', dbErr);
     }
 
-    // FIX #1: Usar formato markdown explícito ![alt](url) para que el parser
-    // de MessageContent siempre reconozca las URLs como imágenes
-    const imageUrlsText = allImages
-      .map(url => `![Imagen generada](${url})`)
-      .join('\n\n');
+    const imageUrlsText = result.images.map(url => `![Imagen generada](${url})`).join('\n\n');
 
     return {
       success: true,
-      message: `🖼️ ${allImages.length > 1 ? `${allImages.length} imágenes generadas` : 'Imagen generada'}:\n\n${imageUrlsText}\n\n¿Le gusta?`,
+      message: `🖼️ Imagen generada:\n\n${imageUrlsText}\n\n¿Le gusta?`,
       buttons: [
-        {
-          id: 'approve_image',
-          label: '👍 Aprobar y programar',
-          type: 'action',
-          style: 'primary',
-          action: 'approve_and_publish',
-        },
-        {
-          id: 'regenerate',
-          label: '🔄 Otra imagen',
-          type: 'action',
-          style: 'secondary',
-          action: 'regenerate_image',
-        },
-        {
-          id: 'skip_image',
-          label: '⭕ Sin imagen',
-          type: 'action',
-          style: 'ghost',
-          action: 'publish_no_image',
-        },
+        { id: 'approve_image', label: '👍 Aprobar y programar', type: 'action', style: 'primary', action: 'approve_and_publish' },
+        { id: 'regenerate', label: '🔄 Otra imagen', type: 'action', style: 'secondary', action: 'regenerate_image' },
+        { id: 'skip_image', label: '⭕ Sin imagen', type: 'action', style: 'ghost', action: 'publish_no_image' },
       ],
       actionContext: {
-        // DB IDs
-        postId: params.postId,
-        planId: params.planId,
+        postId: post.id,
+        planId: post.plan_id,
         sessionId: params.sessionId,
-        // Content como fallback (DB es fuente de verdad via postId)
-        content: params.content,
-        // Image data
-        imageUrls: allImages,
-        imagePrompt,
-        imageModel: model,
-        imageAspectRatio: aspect_ratio,
-        imageCount: count,
-        // Legacy
-        platforms: params.platforms,
+        // imageUrls para el siguiente paso (approve_and_publish lee image_url de DB como fallback)
+        imageUrls: result.images,
       },
     };
   } catch (err) {
@@ -291,85 +230,63 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
   }
 }
 
-// === APPROVE AND PUBLISH (la acción más crítica) ===
-// Flujo: resolve content (DB first) → validate → create_draft → activate → update DB
+// === APPROVE AND PUBLISH ===
+// Lee CONTENT de DB. Lee IMAGE_URL de DB. Publica. Incrementa counter en DB.
+// Bug 5 IMPOSIBLE — content nunca viaja por el frontend.
 
 async function handleApproveAndPublish(params: ActionRequest['params']): Promise<ActionResponse> {
-  const { imageUrls, platforms, scheduledFor, publishNow } = params;
+  const post = await resolvePost(params);
 
-  // --- Resolver content de DB (elimina Bug 5) ---
-  const content = await resolveContent(params);
-
-  // --- Diagnóstico ---
-  console.log(`[Pioneer Action] approve_and_publish content: "${content?.substring(0, 80)}..."`);
-  console.log(`[Pioneer Action] approve_and_publish imageUrls: ${imageUrls?.length || 0}`);
-  console.log(`[Pioneer Action] approve_and_publish postId: ${params.postId || 'none'}, planId: ${params.planId || 'none'}`);
-
-  // --- Validaciones ---
-  if (!content) {
+  if (!post || !post.content) {
+    console.error(`[Pioneer Action] approve_and_publish FAILED: post no encontrado o sin content. postId=${params.postId}, planId=${params.planId}, sessionId=${params.sessionId}`);
     return { success: false, message: 'Error: no hay contenido para publicar.', error: 'missing_content' };
   }
 
-  // --- Resolver plataformas ---
+  const content = post.content;
+  // imageUrls: primero de params (viene de generate_image en el mismo flujo), luego de DB
+  const imageUrls = (params.imageUrls && params.imageUrls.length > 0)
+    ? params.imageUrls
+    : (post.image_url ? [post.image_url] : []);
+
+  console.log(`[Pioneer Action] approve_and_publish: post=${post.id}, order=${post.order_num}, content="${content.substring(0, 80)}...", images=${imageUrls.length}`);
+
+  // --- Resolver plataformas (siempre de Late.dev API) ---
   let resolvedPlatforms: Array<{ platform: string; account_id: string }>;
-
-  if (platforms && platforms.length > 0) {
-    resolvedPlatforms = platforms.map(p => ({
-      platform: p.platform,
-      account_id: p.accountId,
-    }));
-  } else {
-    try {
-      const accountsResult = await listAccounts();
-      if (accountsResult.accounts.length === 0) {
-        return {
-          success: false,
-          message: 'No hay cuentas de redes sociales conectadas. Conecte una cuenta primero.',
-          error: 'no_accounts',
-        };
-      }
-      resolvedPlatforms = accountsResult.accounts.map((acc: { _id: string; platform: string }) => ({
-        platform: acc.platform,
-        account_id: acc._id,
-      }));
-    } catch (err) {
-      return {
-        success: false,
-        message: `Error verificando cuentas: ${err instanceof Error ? err.message : 'Error desconocido'}`,
-        error: 'accounts_error',
-      };
+  try {
+    const accountsResult = await listAccounts();
+    if (accountsResult.accounts.length === 0) {
+      return { success: false, message: 'No hay cuentas de redes sociales conectadas.', error: 'no_accounts' };
     }
-  }
-
-  // --- Paso 1: Crear draft ---
-  const draftInput = {
-    content: content,
-    platforms: resolvedPlatforms,
-    media_urls: imageUrls && imageUrls.length > 0 ? imageUrls : undefined,
-  };
-
-  const validation = await validateAndPrepareDraft(draftInput, !!(imageUrls && imageUrls.length > 0));
-
-  if (!validation.success || !validation.data) {
+    resolvedPlatforms = accountsResult.accounts.map((acc: { _id: string; platform: string }) => ({
+      platform: acc.platform,
+      account_id: acc._id,
+    }));
+  } catch (err) {
     return {
       success: false,
-      message: `Error validando post: ${validation.error}`,
-      error: 'validation_error',
+      message: `Error verificando cuentas: ${err instanceof Error ? err.message : 'Error desconocido'}`,
+      error: 'accounts_error',
     };
+  }
+
+  // --- Crear draft ---
+  const draftInput = {
+    content,
+    platforms: resolvedPlatforms,
+    media_urls: imageUrls.length > 0 ? imageUrls : undefined,
+  };
+
+  const validation = await validateAndPrepareDraft(draftInput, imageUrls.length > 0);
+  if (!validation.success || !validation.data) {
+    return { success: false, message: `Error validando post: ${validation.error}`, error: 'validation_error' };
   }
 
   let draftId: string;
   try {
     const draftResult = await createDraftWithRetry(validation.data);
-
     if (draftResult.duplicate) {
-      return {
-        success: false,
-        message: 'Este contenido ya fue publicado en las últimas 24 horas.',
-        error: 'duplicate',
-      };
+      return { success: false, message: 'Este contenido ya fue publicado en las últimas 24 horas.', error: 'duplicate' };
     }
-
     draftId = draftResult.post._id;
     console.log(`[Pioneer Action] Draft creado: ${draftId}`);
   } catch (err) {
@@ -379,20 +296,14 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     return { success: false, message: `Error creando borrador: ${msg}`, error: 'draft_error' };
   }
 
-  // --- Paso 2: Activar draft (publicar/programar via Queue) ---
+  // --- Activar draft via Queue ---
   const PIONEER_PROFILE_ID = '6984c371b984889d86a8b3d6';
+  const activateData: Record<string, unknown> = {};
 
-  const activateData: {
-    publishNow?: boolean;
-    scheduledFor?: string;
-    timezone?: string;
-    queuedFromProfile?: string;
-  } = {};
-
-  if (publishNow) {
+  if (params.publishNow) {
     activateData.publishNow = true;
-  } else if (scheduledFor) {
-    activateData.scheduledFor = scheduledFor;
+  } else if (params.scheduledFor) {
+    activateData.scheduledFor = params.scheduledFor;
     activateData.timezone = PR_TIMEZONE;
   } else {
     activateData.queuedFromProfile = PIONEER_PROFILE_ID;
@@ -404,66 +315,57 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     const timeLabel = activateData.publishNow
       ? 'publicado ahora'
       : activateData.scheduledFor
-        ? `programado para ${formatScheduledTime(activateData.scheduledFor)}`
+        ? `programado para ${formatScheduledTime(activateData.scheduledFor as string)}`
         : 'agregado a la cola de publicación';
 
-    // --- DB: Actualizar post status y incrementar counter ---
-    let postCount: number | null = params.planPostCount ?? null;
-    let postsPublished: number | null = (params.postsPublished ?? 0) + 1;
+    // --- DB: marcar post como scheduled + incrementar counter ---
+    const planId = post.plan_id;
+    let postCount: number | null = null;
+    let postsPublished: number | null = null;
     let planComplete = false;
 
-    if (params.planId) {
-      try {
-        // Incrementar counter en DB (atómico)
-        const updatedPlan = await incrementPostsPublished(params.planId);
-        postCount = updatedPlan.post_count;
-        postsPublished = updatedPlan.posts_published;
-        planComplete = updatedPlan.status === 'completed';
-        console.log(`[Pioneer DB] Plan counter: ${postsPublished}/${postCount} (complete: ${planComplete})`);
-      } catch (dbErr) {
-        console.error('[Pioneer DB] Error incrementando counter:', dbErr);
-        // Fallback a legacy counter
-        planComplete = postCount != null && postsPublished >= postCount;
-      }
-    } else {
-      // Legacy fallback
-      planComplete = postCount != null && postsPublished >= postCount;
+    try {
+      await markPostScheduled(post.id, draftId);
+      console.log(`[Pioneer DB] Post ${post.id} marcado como scheduled`);
+    } catch (dbErr) {
+      console.error('[Pioneer DB] Error marcando post:', dbErr);
     }
 
-    // DB: Marcar post como scheduled
-    if (params.postId) {
+    try {
+      const updatedPlan = await incrementPostsPublished(planId);
+      postCount = updatedPlan.post_count;
+      postsPublished = updatedPlan.posts_published;
+      planComplete = updatedPlan.status === 'completed';
+      console.log(`[Pioneer DB] Plan counter: ${postsPublished}/${postCount} (complete: ${planComplete})`);
+    } catch (dbErr) {
+      console.error('[Pioneer DB] Error incrementando counter:', dbErr);
       try {
-        await markPostScheduled(params.postId, draftId);
-        console.log(`[Pioneer DB] Post ${params.postId} marcado como scheduled`);
-      } catch (dbErr) {
-        console.error('[Pioneer DB] Error marcando post:', dbErr);
-      }
+        const progress = await getPlanProgress(planId);
+        if (progress) {
+          postCount = progress.postCount;
+          postsPublished = progress.postsPublished;
+          planComplete = progress.isComplete;
+        }
+      } catch { /* ignore */ }
     }
 
-    console.log(`[Pioneer Action] ✅ Post ${timeLabel} (draft: ${draftId}) [${postsPublished}/${postCount ?? '?'}]`);
+    console.log(`[Pioneer Action] ✅ Post ${timeLabel} (draft: ${draftId}) [${postsPublished ?? '?'}/${postCount ?? '?'}]`);
 
     return {
       success: true,
       message: planComplete
         ? `✅ Post ${timeLabel} en ${resolvedPlatforms.map(p => p.platform).join(', ')}.\n\n🎉 ¡Plan completado! Se publicaron los ${postCount} posts del plan.`
         : `✅ Post ${timeLabel} en ${resolvedPlatforms.map(p => p.platform).join(', ')}. (${postsPublished}/${postCount ?? '?'})`,
-      buttons: planComplete
-        ? buildPlanCompleteButtons()
-        : buildNextPostButtons(),
+      buttons: planComplete ? buildPlanCompleteButtons() : buildNextPostButtons(),
       actionContext: {
-        // DB IDs para el siguiente post
-        planId: params.planId,
+        planId,
         sessionId: params.sessionId,
-        // Counter actualizado (legacy compat + display)
-        planPostCount: postCount,
-        postsPublished: postsPublished,
       },
     };
   } catch (err) {
     const msg = err instanceof LateApiError
       ? `Error de Late.dev (HTTP ${err.status}): ${err.body}`
       : err instanceof Error ? err.message : 'Error desconocido';
-
     return {
       success: false,
       message: `El borrador se creó pero no se pudo publicar: ${msg}. Puede intentar de nuevo.`,
@@ -491,27 +393,16 @@ function buildPlanCompleteButtons(): ButtonConfig[] {
 function formatScheduledTime(isoString: string): string {
   try {
     const match = isoString.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-    if (!match) {
-      return isoString;
-    }
-
+    if (!match) return isoString;
     const [, yearStr, monthStr, dayStr, hourStr, minuteStr] = match;
-    const year = parseInt(yearStr);
-    const month = parseInt(monthStr);
-    const day = parseInt(dayStr);
-    const hour = parseInt(hourStr);
-    const minute = parseInt(minuteStr);
-
     const prToUtcOffset = 4;
-    const utcDate = new Date(Date.UTC(year, month - 1, day, hour + prToUtcOffset, minute));
-
+    const utcDate = new Date(Date.UTC(
+      parseInt(yearStr), parseInt(monthStr) - 1, parseInt(dayStr),
+      parseInt(hourStr) + prToUtcOffset, parseInt(minuteStr)
+    ));
     return utcDate.toLocaleString('es-PR', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
+      weekday: 'long', day: 'numeric', month: 'long',
+      hour: 'numeric', minute: '2-digit', hour12: true,
       timeZone: PR_TIMEZONE,
     });
   } catch {

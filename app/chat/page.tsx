@@ -15,20 +15,12 @@ interface ButtonConfig {
 }
 
 interface ActionContext {
-  // DB IDs (Fase DB-1) — fuente principal
+  // DB IDs — esto es TODO lo que se necesita
   sessionId?: string;
   planId?: string;
   postId?: string;
-  // Legacy fields
-  content?: string;
+  // imageUrls solo vive en generate_image → approve_and_publish (mismo flujo)
   imageUrls?: string[];
-  imagePrompt?: string;
-  imageModel?: string;
-  imageAspectRatio?: string;
-  imageCount?: number;
-  platforms?: Array<{ platform: string; accountId: string }>;
-  planPostCount?: number;
-  postsPublished?: number;
 }
 
 interface Message {
@@ -385,7 +377,7 @@ export default function ChatPage() {
     await sendChatMessage(text, messages);
   };
 
-  // === EJECUTAR ACCIÓN (Fase DB-1 — merge simplificado con DB IDs) ===
+  // === EJECUTAR ACCIÓN (DB-first — solo DB IDs) ===
   const executeAction = async (
     button: ButtonConfig,
     messageIndex: number,
@@ -393,64 +385,25 @@ export default function ChatPage() {
   ) => {
     setActionLoading(messageIndex);
 
-    // Merge simplificado: buscar DB IDs y platforms de mensajes anteriores
-    // Content NO se hereda (Bug 5 fix) — se lee de DB por postId
+    // Merge ultra-simple: solo hereda sessionId y planId de mensajes anteriores
+    // postId viene del mensaje actual (cada post tiene su propio ID)
+    // content, imageSpec, platforms — todo se lee de DB en el backend
     const mergedContext: ActionContext = { ...actionContext };
 
-    for (let i = messageIndex - 1; i >= 0; i--) {
-      const prevCtx = messages[i]?.actionContext;
-      if (!prevCtx) continue;
+    if (!mergedContext.sessionId || !mergedContext.planId) {
+      for (let i = messageIndex - 1; i >= 0; i--) {
+        const prevCtx = messages[i]?.actionContext;
+        if (!prevCtx) continue;
 
-      // DB IDs siempre se heredan
-      if (!mergedContext.sessionId && prevCtx.sessionId) {
-        mergedContext.sessionId = prevCtx.sessionId;
-      }
-      if (!mergedContext.planId && prevCtx.planId) {
-        mergedContext.planId = prevCtx.planId;
-      }
-      // postId se hereda dentro del mismo post (pero no entre posts diferentes)
-      if (!mergedContext.postId && prevCtx.postId) {
-        mergedContext.postId = prevCtx.postId;
-      }
-
-      // Content se hereda SOLO dentro del mismo post (previene Bug 5)
-      // Si prevCtx tiene un postId diferente, no heredar su content
-      if (!mergedContext.content && prevCtx.content) {
-        const samePost = !prevCtx.postId || !mergedContext.postId || prevCtx.postId === mergedContext.postId;
-        if (samePost) {
-          mergedContext.content = prevCtx.content;
+        if (!mergedContext.sessionId && prevCtx.sessionId) {
+          mergedContext.sessionId = prevCtx.sessionId;
         }
-      }
+        if (!mergedContext.planId && prevCtx.planId) {
+          mergedContext.planId = prevCtx.planId;
+        }
 
-      // Platforms se heredan
-      if (!mergedContext.platforms && prevCtx.platforms) {
-        mergedContext.platforms = prevCtx.platforms;
+        if (mergedContext.sessionId && mergedContext.planId) break;
       }
-
-      // Image spec se hereda dentro del mismo post
-      if (!mergedContext.imagePrompt && prevCtx.imagePrompt) {
-        mergedContext.imagePrompt = prevCtx.imagePrompt;
-      }
-      if (!mergedContext.imageModel && prevCtx.imageModel) {
-        mergedContext.imageModel = prevCtx.imageModel;
-      }
-      if (!mergedContext.imageAspectRatio && prevCtx.imageAspectRatio) {
-        mergedContext.imageAspectRatio = prevCtx.imageAspectRatio;
-      }
-      if (!mergedContext.imageCount && prevCtx.imageCount) {
-        mergedContext.imageCount = prevCtx.imageCount;
-      }
-
-      // Counter legacy: se hereda como fallback (DB es fuente de verdad)
-      if (mergedContext.planPostCount == null && prevCtx.planPostCount != null) {
-        mergedContext.planPostCount = prevCtx.planPostCount;
-      }
-      if (mergedContext.postsPublished == null && prevCtx.postsPublished != null) {
-        mergedContext.postsPublished = prevCtx.postsPublished;
-      }
-
-      // Si ya tenemos platforms y planId, parar
-      if (mergedContext.platforms && mergedContext.planId) break;
     }
 
     // Inyectar sessionId del state si falta
@@ -458,8 +411,13 @@ export default function ChatPage() {
       mergedContext.sessionId = sessionId;
     }
 
-    // Construir params desde mergedContext
-    const params: Record<string, unknown> = { ...mergedContext };
+    // Enviar solo DB IDs al backend
+    const params: Record<string, unknown> = {
+      sessionId: mergedContext.sessionId,
+      planId: mergedContext.planId,
+      postId: mergedContext.postId,
+      imageUrls: mergedContext.imageUrls,
+    };
 
     try {
       const response = await fetch('/api/chat/action', {
@@ -473,20 +431,12 @@ export default function ChatPage() {
 
       const data = await response.json();
 
-      // Agregar mensaje de resultado como assistant message
+      // Guardar actionContext del server (tiene los DB IDs actualizados)
       const resultMessage: Message = {
         role: 'assistant',
         content: data.message,
         ...(data.buttons && { buttons: data.buttons }),
-        // Merge: action-handler puede devolver actionContext parcial (ej: solo imageUrls).
-        // Combinarlo con mergedContext para que el próximo botón tenga todo.
-        ...(data.buttons?.some((b: ButtonConfig) => b.type === 'action') && {
-          actionContext: { ...mergedContext, ...(data.actionContext || {}) },
-        }),
-        // Si no hay action buttons pero sí hay actionContext del server, guardarlo igual
-        ...(!data.buttons?.some((b: ButtonConfig) => b.type === 'action') && data.actionContext && {
-          actionContext: { ...mergedContext, ...data.actionContext },
-        }),
+        ...(data.actionContext && { actionContext: { ...mergedContext, ...data.actionContext } }),
       };
 
       setMessages(prev => [...prev, resultMessage]);
