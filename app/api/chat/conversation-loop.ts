@@ -1,4 +1,4 @@
-// conversation-loop.ts — Loop principal de tool_use con Draft Guardian como interlock
+// conversation-loop.ts — Fase DB-1: Loop principal con sessionId
 //
 // RESPONSABILIDADES:
 // 1. Llamar a Claude API iterativamente
@@ -8,8 +8,7 @@
 //    - Protección ④: aprobación sin tools → forzar acción (máximo 2 retries)
 // 5. Recoger texto acumulado + estado final
 //
-// Fase 3: Flujo típico: list_accounts → generate_content → describe_image = 3 tools
-// Claude no genera imágenes ni publica — solo diseña. El cliente ejecuta acciones.
+// Fase DB-1: sessionId del guardianState se pasa a executeTool para operaciones DB.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSystemPrompt } from '@/lib/system-prompt';
@@ -178,7 +177,8 @@ export async function runConversationLoop(
           toolBlock.input as Record<string, unknown>,
           pendingOAuthData,
           guardianState.linkedInCachedData,
-          guardianState.cachedConnectionOptions
+          guardianState.cachedConnectionOptions,
+          guardianState.sessionId // Fase DB-1: pasar sessionId para operaciones DB
         );
 
         // ─────────────────────────────────────────

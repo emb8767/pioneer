@@ -1,10 +1,11 @@
-// request-parser.ts — Parse del request HTTP entrante
+// request-parser.ts — Fase DB-1: Parse del request HTTP con sessionId
 //
 // RESPONSABILIDADES:
-// 1. Validar body (messages array)
+// 1. Validar body (messages array + optional sessionId)
 // 2. Formatear mensajes para Anthropic API
 // 3. Leer cookie OAuth (pendingOAuthData)
-// 4. Inicializar estado del guardian
+// 4. Inicializar estado del guardian con sessionId
+// 5. Crear session en DB si no existe
 //
 // ESTILO PLC/LADDER: entrada = NextRequest, salida = ParsedRequest | error
 
@@ -14,12 +15,14 @@ import { getOAuthCookie } from '@/lib/oauth-cookie';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import { createGuardianState } from './draft-guardian';
 import type { GuardianState } from './draft-guardian';
+import { createSession, getSession } from '@/lib/db';
 
 // === RESULTADO DEL PARSING ===
 export interface ParsedRequest {
   messages: Anthropic.MessageParam[];
   pendingOAuthData: OAuthPendingData | null;
   guardianState: GuardianState;
+  sessionId: string | null;
 }
 
 export interface ParseError {
@@ -35,7 +38,7 @@ export type ParseResult =
 export async function parseRequest(request: NextRequest): Promise<ParseResult> {
 
   // 1. Leer y validar body
-  let body: { messages?: unknown };
+  let body: { messages?: unknown; sessionId?: string };
   try {
     body = await request.json();
   } catch {
@@ -45,7 +48,7 @@ export async function parseRequest(request: NextRequest): Promise<ParseResult> {
     };
   }
 
-  const { messages } = body;
+  const { messages, sessionId: incomingSessionId } = body;
 
   if (!messages || !Array.isArray(messages)) {
     return {
@@ -74,8 +77,34 @@ export async function parseRequest(request: NextRequest): Promise<ParseResult> {
     console.warn('[Pioneer] No se pudo leer OAuth cookie:', error);
   }
 
-  // 4. Inicializar estado del guardian
-  const guardianState = createGuardianState();
+  // 4. Resolver sessionId — validar existente o crear nuevo
+  let sessionId: string | null = null;
+  try {
+    if (incomingSessionId) {
+      // Validar que el sessionId existe en DB
+      const session = await getSession(incomingSessionId);
+      if (session) {
+        sessionId = session.id;
+        console.log(`[Pioneer] Session existente: ${sessionId}`);
+      } else {
+        console.warn(`[Pioneer] SessionId inválido: ${incomingSessionId} — creando nuevo`);
+        const newSession = await createSession();
+        sessionId = newSession.id;
+        console.log(`[Pioneer] Session nueva creada: ${sessionId}`);
+      }
+    } else {
+      // Crear nueva session
+      const newSession = await createSession();
+      sessionId = newSession.id;
+      console.log(`[Pioneer] Session nueva creada: ${sessionId}`);
+    }
+  } catch (dbErr) {
+    console.error('[Pioneer] Error con session DB:', dbErr);
+    // No bloquear el flujo — funciona sin DB
+  }
+
+  // 5. Inicializar estado del guardian con sessionId
+  const guardianState = createGuardianState(sessionId);
 
   return {
     success: true,
@@ -83,6 +112,7 @@ export async function parseRequest(request: NextRequest): Promise<ParseResult> {
       messages: formattedMessages,
       pendingOAuthData,
       guardianState,
+      sessionId,
     },
   };
 }

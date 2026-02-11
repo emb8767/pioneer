@@ -1,14 +1,13 @@
-// response-builder.ts — Construye la respuesta HTTP final
+// response-builder.ts — Fase DB-1: ActionContext con DB IDs
 //
 // RESPONSABILIDADES:
-// 1. Detectar botones en texto de Claude + estado del guardian (describe_image)
-// 2. Incluir actionContext cuando hay datos relevantes (content, platforms, imageSpec)
+// 1. Detectar botones en texto de Claude + estado del guardian
+// 2. Incluir actionContext con DB IDs (sessionId, planId, postId) + legacy data
 // 3. Limpiar cookie OAuth si fue consumida
 // 4. Devolver NextResponse con JSON + headers
 //
-// Fase 3 fix: actionContext se incluye SIEMPRE que haya datos relevantes,
-// no solo cuando hay botones de acción. Esto permite al frontend persistir
-// content/platforms entre requests para cuando los botones de acción aparezcan después.
+// Fase DB-1: actionContext incluye DB IDs como fuente principal.
+// Content ya NO se propaga en actionContext — se lee de DB por postId.
 
 import { NextResponse } from 'next/server';
 import { COOKIE_NAME } from '@/lib/oauth-cookie';
@@ -18,14 +17,23 @@ import type { ButtonConfig, DetectorState } from './button-detector';
 
 // ActionContext — datos que el frontend necesita para ejecutar botones de acción
 interface ActionContext {
-  content?: string;           // Texto del post
-  imagePrompt?: string;       // Prompt para generar imagen
-  imageModel?: string;        // Modelo (schnell/pro)
-  imageAspectRatio?: string;  // Aspect ratio
-  imageCount?: number;        // Cantidad de imágenes
+  // DB IDs (Fase DB-1) — fuente de verdad
+  sessionId?: string;
+  planId?: string;
+  postId?: string;
+  // Legacy: content se mantiene TEMPORALMENTE para fallback
+  // Una vez confirmado que DB funciona, se puede eliminar
+  content?: string;
+  // Image spec
+  imagePrompt?: string;
+  imageModel?: string;
+  imageAspectRatio?: string;
+  imageCount?: number;
+  // Platforms
   platforms?: Array<{ platform: string; accountId: string }>;
-  planPostCount?: number;     // Total de posts del plan (de setup_queue)
-  postsPublished?: number;    // Posts publicados hasta ahora
+  // Counter (legacy — DB es fuente de verdad via planId)
+  planPostCount?: number;
+  postsPublished?: number;
 }
 
 export function buildResponse(result: ConversationResult): NextResponse {
@@ -45,19 +53,29 @@ export function buildResponse(result: ConversationResult): NextResponse {
   }
 
   // === CONSTRUIR ACTION CONTEXT ===
-  // Se incluye SIEMPRE que haya datos relevantes (content, platforms, imageSpec).
-  // Razón: generate_content y describe_image pueden ocurrir en requests SEPARADOS.
-  // El frontend persiste el actionContext entre mensajes y lo merge cuando necesita.
   let actionContext: ActionContext | undefined;
 
   const hasContent = !!state.lastGeneratedContent;
   const hasImageSpec = !!state.lastImageSpec;
   const hasPlatforms = !!state.connectedPlatforms;
   const hasPlanPostCount = state.planPostCount !== null;
+  const hasDbIds = !!(state.sessionId || state.activePlanId || state.activePostId);
 
-  if (hasContent || hasImageSpec || hasPlatforms || hasPlanPostCount) {
+  if (hasContent || hasImageSpec || hasPlatforms || hasPlanPostCount || hasDbIds) {
     actionContext = {};
 
+    // DB IDs — siempre incluir si existen
+    if (state.sessionId) {
+      actionContext.sessionId = state.sessionId;
+    }
+    if (state.activePlanId) {
+      actionContext.planId = state.activePlanId;
+    }
+    if (state.activePostId) {
+      actionContext.postId = state.activePostId;
+    }
+
+    // Content — incluir como fallback (DB es fuente de verdad via postId)
     if (state.lastGeneratedContent) {
       actionContext.content = state.lastGeneratedContent;
     }
@@ -77,7 +95,7 @@ export function buildResponse(result: ConversationResult): NextResponse {
       actionContext.planPostCount = state.planPostCount;
     }
 
-    console.log(`[Pioneer] ActionContext incluido: content=${hasContent}, imageSpec=${hasImageSpec}, platforms=${hasPlatforms ? state.connectedPlatforms!.length : 0}, planPostCount=${state.planPostCount ?? 'null'}`);
+    console.log(`[Pioneer] ActionContext: sessionId=${state.sessionId || 'null'}, planId=${state.activePlanId || 'null'}, postId=${state.activePostId || 'null'}, content=${hasContent}, imageSpec=${hasImageSpec}, platforms=${hasPlatforms ? state.connectedPlatforms!.length : 0}`);
   }
 
   // === CONSTRUIR RESPUESTA JSON ===
@@ -86,6 +104,8 @@ export function buildResponse(result: ConversationResult): NextResponse {
     ...(result.lastUsage && { usage: result.lastUsage }),
     ...(buttons && { buttons }),
     ...(actionContext && { actionContext }),
+    // Fase DB-1: sessionId para que el frontend lo persista
+    ...(state.sessionId && { sessionId: state.sessionId }),
   });
 
   // === LIMPIAR COOKIE OAUTH SI FUE CONSUMIDA ===

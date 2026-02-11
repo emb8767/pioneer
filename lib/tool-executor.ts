@@ -1,4 +1,4 @@
-// Ejecutor de tools para Pioneer Agent — Fase 3
+// Ejecutor de tools para Pioneer Agent — Fase DB-1
 // Llamadas directas a APIs (sin fetch HTTP — regla Vercel serverless)
 //
 // === TOOLS ACTIVAS (6) ===
@@ -8,6 +8,10 @@
 // describe_image → ELIMINADO (Fase 4: imageSpec se genera dentro de generate_content)
 // generate_image, create_draft, publish_post → movidos a action-handler.ts (botones de acción)
 // Claude solo PIENSA. Los botones EJECUTAN.
+//
+// === DB INTEGRATION (Fase DB-1) ===
+// setup_queue → crea plan en DB con post_count y queue_slots
+// generate_content → crea post en DB con content + imageSpec
 
 import {
   listAccounts,
@@ -29,6 +33,7 @@ import {
   setupQueueSlots,
 } from '@/lib/late-client';
 import { generateContent } from '@/lib/content-generator';
+import { createPlan, createPost, getActivePlan, getPostsByPlan } from '@/lib/db';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform } from '@/lib/types';
 
@@ -59,7 +64,7 @@ function calculateUpcomingSlotDates(
       // Calcular la fecha de este slot
       const candidate = new Date(now);
       const currentDay = candidate.getDay();
-      let daysUntilSlot = slot.dayOfWeek - currentDay + (weekOffset * 7);
+      const daysUntilSlot = slot.dayOfWeek - currentDay + (weekOffset * 7);
       if (weekOffset === 0 && daysUntilSlot < 0) continue; // Ya pasó esta semana
 
       candidate.setDate(candidate.getDate() + daysUntilSlot);
@@ -118,7 +123,9 @@ export async function executeTool(
   // OAuth headless context
   pendingOAuthData: OAuthPendingData | null,
   linkedInCachedData: Record<string, unknown> | null,
-  cachedConnectionOptions: Array<{ id: string; name: string }> | null
+  cachedConnectionOptions: Array<{ id: string; name: string }> | null,
+  // DB context (Fase DB-1)
+  sessionId: string | null
 ): Promise<ToolResult> {
   try {
     switch (toolName) {
@@ -173,7 +180,43 @@ export async function executeTool(
           tone: input.tone || 'professional',
           include_hashtags: input.include_hashtags !== false,
         });
-        return defaultResult(JSON.stringify(result));
+
+        // === DB: Crear post en la base de datos ===
+        let postId: string | null = null;
+        if (sessionId && result.content?.text) {
+          try {
+            // Buscar plan activo de esta sesión
+            const activePlan = await getActivePlan(sessionId);
+            if (activePlan) {
+              // Contar posts existentes para determinar order_num
+              const existingPosts = await getPostsByPlan(activePlan.id);
+              const orderNum = existingPosts.length + 1;
+
+              const dbPost = await createPost(activePlan.id, {
+                order_num: orderNum,
+                content: result.content.text,
+                image_prompt: result.imageSpec?.prompt,
+                image_model: result.imageSpec?.model || 'schnell',
+                image_aspect_ratio: result.imageSpec?.aspect_ratio || '1:1',
+              });
+              postId = dbPost.id;
+              console.log(`[Pioneer DB] Post creado: ${postId} (order: ${orderNum}, plan: ${activePlan.id})`);
+            } else {
+              console.warn(`[Pioneer DB] No hay plan activo para sessionId=${sessionId} — post no guardado en DB`);
+            }
+          } catch (dbErr) {
+            console.error('[Pioneer DB] Error creando post:', dbErr);
+            // No bloquear el flujo — el post se puede publicar sin DB
+          }
+        }
+
+        // Incluir postId en el resultado para que draft-guardian lo capture
+        const resultWithDb = {
+          ...result,
+          ...(postId && { postId }),
+        };
+
+        return defaultResult(JSON.stringify(resultWithDb));
       }
 
       // === TOOL: Queue ===
@@ -202,6 +245,24 @@ export async function executeTool(
           const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
           const slotDescriptions = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`);
 
+          // === DB: Crear plan en la base de datos ===
+          let planId: string | null = null;
+          if (sessionId) {
+            try {
+              const dbPlan = await createPlan(sessionId, {
+                post_count: postCount,
+                queue_slots: formattedSlots,
+              });
+              planId = dbPlan.id;
+              console.log(`[Pioneer DB] Plan creado: ${planId} (posts: ${postCount}, session: ${sessionId})`);
+            } catch (dbErr) {
+              console.error('[Pioneer DB] Error creando plan:', dbErr);
+              // No bloquear el flujo — queue ya está configurado en Late.dev
+            }
+          } else {
+            console.warn('[Pioneer DB] No hay sessionId — plan no guardado en DB');
+          }
+
           return defaultResult(JSON.stringify({
             success: true,
             message: `Cola de publicación configurada: ${slotDescriptions.join(', ')}.`,
@@ -210,6 +271,8 @@ export async function executeTool(
             profile_id: profileId,
             upcoming_dates: upcomingDates,
             instructions: 'USA estas fechas exactas en el plan. Son las fechas REALES en que se publicarán los posts. NO inventes otras fechas.',
+            // DB info
+            ...(planId && { planId }),
           }));
         } catch (error) {
           console.error('[Pioneer] Error configurando queue:', error);

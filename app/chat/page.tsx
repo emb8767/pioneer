@@ -15,6 +15,11 @@ interface ButtonConfig {
 }
 
 interface ActionContext {
+  // DB IDs (Fase DB-1) — fuente principal
+  sessionId?: string;
+  planId?: string;
+  postId?: string;
+  // Legacy fields
   content?: string;
   imageUrls?: string[];
   imagePrompt?: string;
@@ -22,8 +27,8 @@ interface ActionContext {
   imageAspectRatio?: string;
   imageCount?: number;
   platforms?: Array<{ platform: string; accountId: string }>;
-  planPostCount?: number;     // Total de posts del plan
-  postsPublished?: number;    // Posts publicados hasta ahora
+  planPostCount?: number;
+  postsPublished?: number;
 }
 
 interface Message {
@@ -243,6 +248,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<number | null>(null); // index del msg con acción en curso
   const [pendingConnectionHandled, setPendingConnectionHandled] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null); // DB session ID
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -306,7 +312,10 @@ export default function ChatPage() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: messagesToSend }),
+        body: JSON.stringify({
+          messages: messagesToSend,
+          sessionId, // Enviar sessionId al backend
+        }),
       });
 
       if (!response.ok) {
@@ -315,20 +324,28 @@ export default function ChatPage() {
 
       const data = await response.json();
 
-      // Inyectar post counter en actionContext si falta
-      // El counter vive en el frontend (no persiste en backend entre requests)
-      // Lo buscamos del último mensaje que lo tenga
+      // Capturar sessionId de la respuesta (si el backend lo creó)
+      if (data.sessionId && !sessionId) {
+        setSessionId(data.sessionId);
+        console.log(`[Pioneer] SessionId recibido: ${data.sessionId}`);
+      }
+
+      // Construir actionContext de la respuesta
       let responseActionContext = data.actionContext;
-      if (responseActionContext && responseActionContext.planPostCount == null) {
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-          const prevCtx = newMessages[i].actionContext;
-          if (prevCtx?.planPostCount != null) {
-            responseActionContext = {
-              ...responseActionContext,
-              planPostCount: prevCtx.planPostCount,
-              postsPublished: prevCtx.postsPublished ?? 0,
-            };
-            break;
+
+      // Inyectar DB IDs heredados si faltan en la respuesta
+      if (responseActionContext) {
+        // sessionId siempre se hereda
+        if (!responseActionContext.sessionId && (sessionId || data.sessionId)) {
+          responseActionContext.sessionId = sessionId || data.sessionId;
+        }
+        // planId: buscar en mensajes anteriores si no viene
+        if (!responseActionContext.planId) {
+          for (let i = newMessages.length - 1; i >= 0; i--) {
+            if (newMessages[i].actionContext?.planId) {
+              responseActionContext.planId = newMessages[i].actionContext!.planId;
+              break;
+            }
           }
         }
       }
@@ -368,7 +385,7 @@ export default function ChatPage() {
     await sendChatMessage(text, messages);
   };
 
-  // === EJECUTAR ACCIÓN (Fase 1B — llama /api/chat/action directo) ===
+  // === EJECUTAR ACCIÓN (Fase DB-1 — merge simplificado con DB IDs) ===
   const executeAction = async (
     button: ButtonConfig,
     messageIndex: number,
@@ -376,25 +393,29 @@ export default function ChatPage() {
   ) => {
     setActionLoading(messageIndex);
 
-    // Merge actionContext: el mensaje actual puede tener solo imageSpec,
-    // pero un mensaje anterior (DENTRO DEL MISMO POST) puede tener content y platforms.
-    //
-    // FIX BUG 5: NUNCA heredar `content` de mensajes anteriores.
-    // content DEBE venir del actionContext del mensaje actual o de la cadena
-    // de acciones del post actual (approve_text → generate_image → approve_and_publish).
-    // El merge hacia atrás SOLO busca platforms e imageSpec, NUNCA content.
-    // Razón: si el merge hereda content, al publicar Post #2 puede tomar el content
-    // del Post #1 cuando Claude no usó generate_content (violó instrucciones del system prompt).
+    // Merge simplificado: buscar DB IDs y platforms de mensajes anteriores
+    // Content NO se hereda (Bug 5 fix) — se lee de DB por postId
     const mergedContext: ActionContext = { ...actionContext };
 
     for (let i = messageIndex - 1; i >= 0; i--) {
       const prevCtx = messages[i]?.actionContext;
       if (!prevCtx) continue;
 
-      // BUG 5 FIX: NUNCA heredar content — solo platforms e image data
+      // DB IDs siempre se heredan
+      if (!mergedContext.sessionId && prevCtx.sessionId) {
+        mergedContext.sessionId = prevCtx.sessionId;
+      }
+      if (!mergedContext.planId && prevCtx.planId) {
+        mergedContext.planId = prevCtx.planId;
+      }
+      // postId NO se hereda entre posts (cada post tiene su propio ID)
+
+      // Platforms se heredan
       if (!mergedContext.platforms && prevCtx.platforms) {
         mergedContext.platforms = prevCtx.platforms;
       }
+
+      // Image spec se hereda dentro del mismo post
       if (!mergedContext.imagePrompt && prevCtx.imagePrompt) {
         mergedContext.imagePrompt = prevCtx.imagePrompt;
       }
@@ -407,7 +428,8 @@ export default function ChatPage() {
       if (!mergedContext.imageCount && prevCtx.imageCount) {
         mergedContext.imageCount = prevCtx.imageCount;
       }
-      // Post counter SÍ se hereda entre posts (persiste durante todo el plan)
+
+      // Counter legacy: se hereda como fallback (DB es fuente de verdad)
       if (mergedContext.planPostCount == null && prevCtx.planPostCount != null) {
         mergedContext.planPostCount = prevCtx.planPostCount;
       }
@@ -415,13 +437,13 @@ export default function ChatPage() {
         mergedContext.postsPublished = prevCtx.postsPublished;
       }
 
-      // Si ya tenemos platforms y counter, parar
-      if (mergedContext.platforms && mergedContext.planPostCount != null) break;
+      // Si ya tenemos platforms y planId, parar
+      if (mergedContext.platforms && mergedContext.planId) break;
     }
 
-    // BUG 5 SAFETY: Si después del merge no hay content, log y abortar
-    if (!mergedContext.content && button.action !== 'regenerate_image') {
-      console.error(`[Pioneer BUG5] ⛔ No content in actionContext for action "${button.action}" at msgIndex ${messageIndex}. ActionContext:`, JSON.stringify(actionContext));
+    // Inyectar sessionId del state si falta
+    if (!mergedContext.sessionId && sessionId) {
+      mergedContext.sessionId = sessionId;
     }
 
     // Construir params desde mergedContext

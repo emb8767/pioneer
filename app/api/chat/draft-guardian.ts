@@ -1,9 +1,10 @@
-// draft-guardian.ts — Fase 3: Simplificado
+// draft-guardian.ts — Fase DB-1: Tracking de IDs de DB
 //
 // Con generate_image movido a action buttons, ya no hay image tracking en el loop.
 // Lo que queda:
 // - Protección ④: Si el cliente aprueba y Claude no usa NINGUNA tool → forzar generate_content
 // - Tracking de estado: content text, imageSpec, platforms → para actionContext de botones
+// - DB IDs: sessionId, planId, postId → para que action-handler lea de DB
 //
 // ESTILO PLC/LADDER: entrada clara, salida clara
 
@@ -37,7 +38,7 @@ export interface GuardianState {
   lastGeneratedContent: string | null;
   connectedPlatforms: Array<{ platform: string; accountId: string }> | null;
 
-  // Image spec tracking (from describe_image tool — Claude describes, client generates)
+  // Image spec tracking (from generate_content auto image prompt)
   describeImageWasCalled: boolean;
   lastImageSpec: {
     prompt: string;
@@ -46,7 +47,12 @@ export interface GuardianState {
     count: number;
   } | null;
 
-  // Post counter — cuántos posts tiene el plan (de setup_queue)
+  // DB IDs (Fase DB-1) — fuente de verdad para content y counter
+  sessionId: string | null;
+  activePlanId: string | null;
+  activePostId: string | null;
+
+  // Post counter — legacy (de setup_queue, se mantiene para backward compat)
   planPostCount: number | null;
 
   // OAuth tracking
@@ -55,13 +61,16 @@ export interface GuardianState {
   cachedConnectionOptions: Array<{ id: string; name: string }> | null;
 }
 
-export function createGuardianState(): GuardianState {
+export function createGuardianState(sessionId?: string | null): GuardianState {
   return {
     anyToolExecutedInRequest: false,
     lastGeneratedContent: null,
     connectedPlatforms: null,
     describeImageWasCalled: false,
     lastImageSpec: null,
+    sessionId: sessionId || null,
+    activePlanId: null,
+    activePostId: null,
     planPostCount: null,
     shouldClearOAuthCookie: false,
     linkedInCachedData: null,
@@ -128,7 +137,7 @@ export function updateStateAfterTool(
   // --- Marcar que al menos una tool se ejecutó ---
   state.anyToolExecutedInRequest = true;
 
-  // --- generate_content → capturar texto + imageSpec para actionContext ---
+  // --- generate_content → capturar texto + imageSpec + postId para actionContext ---
   if (toolName === 'generate_content') {
     try {
       const result = JSON.parse(toolResultJson);
@@ -142,12 +151,17 @@ export function updateStateAfterTool(
         state.lastImageSpec = result.imageSpec;
         console.log(`[DraftGuardian] ImageSpec capturado (auto): prompt="${result.imageSpec.prompt.substring(0, 60)}...", model=${result.imageSpec.model}`);
       }
+      // DB: capturar postId
+      if (result.postId) {
+        state.activePostId = result.postId;
+        console.log(`[DraftGuardian] PostId capturado: ${result.postId}`);
+      }
     } catch {
       // No-op
     }
   }
 
-  // --- describe_image → capturar spec para actionContext ---
+  // --- describe_image → capturar spec para actionContext (legacy, no debería ocurrir en Fase 4) ---
   if (toolName === 'describe_image') {
     state.describeImageWasCalled = true;
     try {
@@ -178,13 +192,18 @@ export function updateStateAfterTool(
     }
   }
 
-  // --- setup_queue → capturar planPostCount para limitar posts del plan ---
+  // --- setup_queue → capturar planPostCount + planId ---
   if (toolName === 'setup_queue') {
     try {
       const result = JSON.parse(toolResultJson);
       if (result.success && result.upcoming_dates) {
         state.planPostCount = result.upcoming_dates.length;
         console.log(`[DraftGuardian] planPostCount capturado: ${state.planPostCount}`);
+      }
+      // DB: capturar planId
+      if (result.planId) {
+        state.activePlanId = result.planId;
+        console.log(`[DraftGuardian] PlanId capturado: ${result.planId}`);
       }
     } catch {
       // No-op

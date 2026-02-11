@@ -1,13 +1,11 @@
-// route.ts — Orquestador del chat API (estilo PLC/Ladder)
+// route.ts — Fase DB-1: Orquestador del chat API con sessionId
 //
-// ANTES: 216 líneas con parsing, loop, tracking, response builder, todo mezclado.
-// AHORA: Secuencia lineal de 3 pasos claros:
-//   1. parseRequest   → validar input, leer cookies, init estado
+// Secuencia lineal de 3 pasos:
+//   1. parseRequest   → validar input, leer cookies, crear/validar session
 //   2. conversationLoop → loop de tool_use con draft-guardian como interlock
-//   3. buildResponse   → inyección imagen, cookie clear, JSON
+//   3. buildResponse   → botones, actionContext con DB IDs, sessionId en JSON
 //
-// Cada módulo es un "rung" independiente con entrada/salida clara.
-// draft-guardian.ts es el "interlock" que valida EN CÓDIGO las 3 zonas grises.
+// sessionId fluye: request-parser → guardianState → buildResponse → JSON
 
 import Anthropic from '@anthropic-ai/sdk';
 import { NextRequest, NextResponse } from 'next/server';
@@ -42,6 +40,7 @@ export async function POST(request: NextRequest) {
 
     // ═══════════════════════════════════════
     // RUNG 3: Construir respuesta HTTP
+    // (sessionId incluido via guardianState)
     // ═══════════════════════════════════════
     return buildResponse(result);
 
