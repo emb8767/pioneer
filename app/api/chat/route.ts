@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     // RUNG 3: Construir respuesta HTTP
     // (sessionId incluido via guardianState)
     // ═══════════════════════════════════════
-    return buildResponse(result);
+    return await buildResponse(result);
 
   } catch (error) {
     console.error('[Pioneer] Error en POST /api/chat:', error);
