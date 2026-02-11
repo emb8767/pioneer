@@ -46,6 +46,9 @@ export interface GuardianState {
     count: number;
   } | null;
 
+  // Post counter — cuántos posts tiene el plan (de setup_queue)
+  planPostCount: number | null;
+
   // OAuth tracking
   shouldClearOAuthCookie: boolean;
   linkedInCachedData: Record<string, unknown> | null;
@@ -59,6 +62,7 @@ export function createGuardianState(): GuardianState {
     connectedPlatforms: null,
     describeImageWasCalled: false,
     lastImageSpec: null,
+    planPostCount: null,
     shouldClearOAuthCookie: false,
     linkedInCachedData: null,
     cachedConnectionOptions: null,
@@ -168,6 +172,19 @@ export function updateStateAfterTool(
             accountId: acc._id,
           })
         );
+      }
+    } catch {
+      // No-op
+    }
+  }
+
+  // --- setup_queue → capturar planPostCount para limitar posts del plan ---
+  if (toolName === 'setup_queue') {
+    try {
+      const result = JSON.parse(toolResultJson);
+      if (result.success && result.upcoming_dates) {
+        state.planPostCount = result.upcoming_dates.length;
+        console.log(`[DraftGuardian] planPostCount capturado: ${state.planPostCount}`);
       }
     } catch {
       // No-op

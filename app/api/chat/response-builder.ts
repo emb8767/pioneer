@@ -24,6 +24,8 @@ interface ActionContext {
   imageAspectRatio?: string;  // Aspect ratio
   imageCount?: number;        // Cantidad de imágenes
   platforms?: Array<{ platform: string; accountId: string }>;
+  planPostCount?: number;     // Total de posts del plan (de setup_queue)
+  postsPublished?: number;    // Posts publicados hasta ahora
 }
 
 export function buildResponse(result: ConversationResult): NextResponse {
@@ -51,8 +53,9 @@ export function buildResponse(result: ConversationResult): NextResponse {
   const hasContent = !!state.lastGeneratedContent;
   const hasImageSpec = !!state.lastImageSpec;
   const hasPlatforms = !!state.connectedPlatforms;
+  const hasPlanPostCount = state.planPostCount !== null;
 
-  if (hasContent || hasImageSpec || hasPlatforms) {
+  if (hasContent || hasImageSpec || hasPlatforms || hasPlanPostCount) {
     actionContext = {};
 
     if (state.lastGeneratedContent) {
@@ -70,7 +73,11 @@ export function buildResponse(result: ConversationResult): NextResponse {
       actionContext.platforms = state.connectedPlatforms;
     }
 
-    console.log(`[Pioneer] ActionContext incluido: content=${hasContent}, imageSpec=${hasImageSpec}, platforms=${hasPlatforms ? state.connectedPlatforms!.length : 0}`);
+    if (state.planPostCount !== null) {
+      actionContext.planPostCount = state.planPostCount;
+    }
+
+    console.log(`[Pioneer] ActionContext incluido: content=${hasContent}, imageSpec=${hasImageSpec}, platforms=${hasPlatforms ? state.connectedPlatforms!.length : 0}, planPostCount=${state.planPostCount ?? 'null'}`);
   }
 
   // === CONSTRUIR RESPUESTA JSON ===

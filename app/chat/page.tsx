@@ -22,6 +22,8 @@ interface ActionContext {
   imageAspectRatio?: string;
   imageCount?: number;
   platforms?: Array<{ platform: string; accountId: string }>;
+  planPostCount?: number;     // Total de posts del plan
+  postsPublished?: number;    // Posts publicados hasta ahora
 }
 
 interface Message {
@@ -387,9 +389,16 @@ export default function ChatPage() {
       if (!mergedContext.imageCount && prevCtx.imageCount) {
         mergedContext.imageCount = prevCtx.imageCount;
       }
+      // Post counter SÍ se hereda entre posts (persiste durante todo el plan)
+      if (mergedContext.planPostCount == null && prevCtx.planPostCount != null) {
+        mergedContext.planPostCount = prevCtx.planPostCount;
+      }
+      if (mergedContext.postsPublished == null && prevCtx.postsPublished != null) {
+        mergedContext.postsPublished = prevCtx.postsPublished;
+      }
 
-      // Si ya tenemos platforms, parar (content viene del mensaje actual, no de merge)
-      if (mergedContext.platforms) break;
+      // Si ya tenemos platforms y counter, parar
+      if (mergedContext.platforms && mergedContext.planPostCount != null) break;
     }
 
     // BUG 5 SAFETY: Si después del merge no hay content, log y abortar

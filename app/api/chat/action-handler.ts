@@ -33,6 +33,9 @@ export interface ActionRequest {
     imageModel?: string;
     imageAspectRatio?: string;
     imageCount?: number;
+    // Post counter
+    planPostCount?: number;
+    postsPublished?: number;
   };
 }
 
@@ -235,11 +238,12 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
 // Flujo: validate → create_draft → activate → confirmación + botones siguiente
 
 async function handleApproveAndPublish(params: ActionRequest['params']): Promise<ActionResponse> {
-  const { content, imageUrls, platforms, scheduledFor, publishNow } = params;
+  const { content, imageUrls, platforms, scheduledFor, publishNow, planPostCount, postsPublished } = params;
 
   // --- Diagnóstico: qué content se está publicando ---
   console.log(`[Pioneer Action] approve_and_publish content: "${content?.substring(0, 80)}..."`);
   console.log(`[Pioneer Action] approve_and_publish imageUrls: ${imageUrls?.length || 0}`);
+  console.log(`[Pioneer Action] approve_and_publish postCounter: ${(postsPublished ?? 0) + 1}/${planPostCount ?? '?'}`);
 
   // --- Validaciones ---
   if (!content) {
@@ -347,12 +351,25 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
         ? `programado para ${formatScheduledTime(activateData.scheduledFor)}`
         : 'agregado a la cola de publicación';
 
-    console.log(`[Pioneer Action] ✅ Post ${timeLabel} (draft: ${draftId})`);
+    // --- Post counter: incrementar y decidir botones ---
+    const newPostsPublished = (postsPublished ?? 0) + 1;
+    const planComplete = planPostCount != null && newPostsPublished >= planPostCount;
+
+    console.log(`[Pioneer Action] ✅ Post ${timeLabel} (draft: ${draftId}) [${newPostsPublished}/${planPostCount ?? '?'}]`);
 
     return {
       success: true,
-      message: `✅ Post ${timeLabel} en ${resolvedPlatforms.map(p => p.platform).join(', ')}.`,
-      buttons: buildNextPostButtons(),
+      message: planComplete
+        ? `✅ Post ${timeLabel} en ${resolvedPlatforms.map(p => p.platform).join(', ')}.\n\n🎉 ¡Plan completado! Se publicaron los ${planPostCount} posts del plan.`
+        : `✅ Post ${timeLabel} en ${resolvedPlatforms.map(p => p.platform).join(', ')}. (${newPostsPublished}/${planPostCount ?? '?'})`,
+      buttons: planComplete
+        ? buildPlanCompleteButtons()
+        : buildNextPostButtons(),
+      // Propagar el contador actualizado para el siguiente post
+      actionContext: {
+        planPostCount,
+        postsPublished: newPostsPublished,
+      },
     };
   } catch (err) {
     const msg = err instanceof LateApiError
@@ -373,6 +390,13 @@ function buildNextPostButtons(): ButtonConfig[] {
   return [
     { id: 'next_post', label: '▶️ Siguiente post', type: 'option', style: 'primary', chatMessage: 'Continuemos con el siguiente post' },
     { id: 'pause', label: '⏸️ Terminar por hoy', type: 'option', style: 'ghost', chatMessage: 'Pausar el plan por ahora' },
+  ];
+}
+
+function buildPlanCompleteButtons(): ButtonConfig[] {
+  return [
+    { id: 'more_posts', label: '➕ Crear más posts', type: 'option', style: 'secondary', chatMessage: 'Quiero crear más posts adicionales' },
+    { id: 'done', label: '✅ Listo, terminamos', type: 'option', style: 'primary', chatMessage: 'Listo, terminamos por ahora' },
   ];
 }
 
