@@ -110,6 +110,8 @@ async function handleApproveText(params: ActionRequest['params']): Promise<Actio
         imageModel: params.imageModel,
         imageAspectRatio: params.imageAspectRatio,
         imageCount: params.imageCount,
+        planPostCount: params.planPostCount,
+        postsPublished: params.postsPublished,
       },
     };
   }
@@ -130,6 +132,8 @@ async function handleApproveText(params: ActionRequest['params']): Promise<Actio
     actionContext: {
       content: params.content,
       platforms: params.platforms,
+      planPostCount: params.planPostCount,
+      postsPublished: params.postsPublished,
     },
   };
 }
@@ -223,6 +227,8 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
         imageModel: model,
         imageAspectRatio: aspect_ratio,
         imageCount: count,
+        planPostCount: params.planPostCount,
+        postsPublished: params.postsPublished,
       },
     };
   } catch (err) {

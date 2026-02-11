@@ -315,11 +315,29 @@ export default function ChatPage() {
 
       const data = await response.json();
 
+      // Inyectar post counter en actionContext si falta
+      // El counter vive en el frontend (no persiste en backend entre requests)
+      // Lo buscamos del último mensaje que lo tenga
+      let responseActionContext = data.actionContext;
+      if (responseActionContext && responseActionContext.planPostCount == null) {
+        for (let i = newMessages.length - 1; i >= 0; i--) {
+          const prevCtx = newMessages[i].actionContext;
+          if (prevCtx?.planPostCount != null) {
+            responseActionContext = {
+              ...responseActionContext,
+              planPostCount: prevCtx.planPostCount,
+              postsPublished: prevCtx.postsPublished ?? 0,
+            };
+            break;
+          }
+        }
+      }
+
       const assistantMessage: Message = {
         role: 'assistant',
         content: data.message,
         ...(data.buttons && { buttons: data.buttons }),
-        ...(data.actionContext && { actionContext: data.actionContext }),
+        ...(responseActionContext && { actionContext: responseActionContext }),
       };
 
       setMessages([...newMessages, assistantMessage]);
