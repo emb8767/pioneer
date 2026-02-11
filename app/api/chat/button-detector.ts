@@ -344,7 +344,7 @@ function buildImageOfferButtons(): ButtonConfig[] {
 
 function buildPlanApprovalButtons(): ButtonConfig[] {
   return [
-    { id: 'approve_plan', label: '✅ Aprobado', type: 'option', style: 'primary', chatMessage: 'Aprobado' },
+    { id: 'approve_plan', label: '✅ Aprobado', type: 'action', style: 'primary', action: 'approve_plan' },
     { id: 'change_plan', label: '✏️ Cambios', type: 'option', style: 'ghost', chatMessage: '' },
   ];
 }
@@ -358,7 +358,7 @@ function buildPublishTimingButtons(): ButtonConfig[] {
 
 function buildNextPostButtons(): ButtonConfig[] {
   return [
-    { id: 'next_post', label: '▶️ Siguiente post', type: 'option', style: 'primary', chatMessage: 'Continuemos con el siguiente post' },
+    { id: 'next_post', label: '▶️ Siguiente post', type: 'action', style: 'primary', action: 'next_post' },
     { id: 'pause', label: '⏸️ Terminar por hoy', type: 'option', style: 'ghost', chatMessage: 'Pausar el plan por ahora' },
   ];
 }

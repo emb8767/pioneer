@@ -217,23 +217,25 @@ export async function createPost(
   postData: {
     order_num: number;
     title?: string;
-    content: string;
+    content?: string;
     image_prompt?: string;
     image_model?: string;
     image_aspect_ratio?: string;
   }
 ): Promise<DbPost> {
+  const hasContent = postData.content && postData.content.length > 0;
+
   const { data, error } = await supabase
     .from('posts')
     .insert({
       plan_id: planId,
       order_num: postData.order_num,
       title: postData.title,
-      content: postData.content,
+      content: postData.content || null,
       image_prompt: postData.image_prompt,
       image_model: postData.image_model || 'schnell',
       image_aspect_ratio: postData.image_aspect_ratio || '1:1',
-      status: 'content_ready',
+      status: hasContent ? 'content_ready' : 'pending',
     })
     .select()
     .single();

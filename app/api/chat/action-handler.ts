@@ -1,28 +1,32 @@
-// action-handler.ts — DB-first: Lee TODO de la base de datos
+// action-handler.ts — Fase 5: Pipeline 100% determinístico
 //
-// PRINCIPIO: El frontend solo envía sessionId + planId + postId.
-// Content, imageSpec, platforms, counter — TODO viene de DB.
-// Bug 5 es IMPOSIBLE porque content nunca viaja por el frontend.
+// Claude = pensar, analizar, diseñar
+// Action-handler = ejecutar TODO
 //
-// RESPONSABILIDADES:
-// 1. approve_text: lee post de DB, muestra botones de imagen
-// 2. generate_image: genera imagen, guarda URL en DB
-// 3. approve_and_publish: lee content+image de DB, publica, incrementa counter en DB
-// 4. publish_no_image: igual sin media
-// 5. regenerate_image: nueva imagen con spec de DB
+// ACCIONES:
+// 1. approve_plan    → parsear plan de Claude, setup_queue, crear plan+posts en DB
+// 2. next_post       → generar texto via Claude API aislado, guardar en DB, mostrar
+// 3. approve_text    → mostrar opciones de imagen
+// 4. generate_image  → Replicate genera, guarda URL en DB
+// 5. approve_and_publish → create_draft + activate + incrementar counter
+// 6. publish_no_image    → igual sin media
+// 7. regenerate_image    → nueva imagen con spec de DB
 
+import Anthropic from '@anthropic-ai/sdk';
 import {
   validateAndPrepareDraft,
   createDraftWithRetry,
   activateDraftWithRetry,
 } from '@/lib/publish-validator';
-import { listAccounts, LateApiError, PR_TIMEZONE } from '@/lib/late-client';
+import { listAccounts, setupQueueSlots, LateApiError, PR_TIMEZONE } from '@/lib/late-client';
 import { generateImage } from '@/lib/replicate-client';
 import {
   getPost,
   updatePost,
   getActivePlan,
   getPostsByPlan,
+  createPlan,
+  createPost,
   incrementPostsPublished,
   markPostScheduled,
   getPlanProgress,
@@ -34,15 +38,16 @@ import type { ButtonConfig } from './button-detector';
 export interface ActionRequest {
   action: string;
   params: {
-    // DB IDs — esto es TODO lo que el frontend necesita enviar
     postId?: string;
     planId?: string;
     sessionId?: string;
-    // imageUrls solo vive en el flujo generate_image → approve_and_publish (mismo request chain)
     imageUrls?: string[];
-    // Scheduling overrides (futuro)
     scheduledFor?: string;
     publishNow?: boolean;
+    // Para approve_plan: el texto completo de Claude con el plan
+    planText?: string;
+    // Para approve_plan: historial de mensajes para contexto
+    conversationContext?: string;
   };
 }
 
@@ -54,50 +59,7 @@ export interface ActionResponse {
   error?: string;
 }
 
-// === HELPER: Resolver post — DB es la fuente de verdad ===
-async function resolvePost(params: ActionRequest['params']) {
-  // 1. Directo por postId
-  if (params.postId) {
-    const post = await getPost(params.postId);
-    if (post) {
-      console.log(`[Pioneer Action] Post resuelto por postId: ${post.id} (order: ${post.order_num}, status: ${post.status})`);
-      return post;
-    }
-    console.warn(`[Pioneer Action] postId ${params.postId} no encontrado en DB`);
-  }
-
-  // 2. Buscar por planId — el post más reciente con content que no ha sido publicado
-  if (params.planId) {
-    const posts = await getPostsByPlan(params.planId);
-    const pending = posts.filter(p =>
-      p.content && ['content_ready', 'image_ready'].includes(p.status)
-    );
-    if (pending.length > 0) {
-      const post = pending[pending.length - 1];
-      console.log(`[Pioneer Action] Post resuelto por planId fallback: ${post.id} (order: ${post.order_num})`);
-      return post;
-    }
-  }
-
-  // 3. Buscar por sessionId → plan activo → post pendiente
-  if (params.sessionId) {
-    const plan = await getActivePlan(params.sessionId);
-    if (plan) {
-      const posts = await getPostsByPlan(plan.id);
-      const pending = posts.filter(p =>
-        p.content && ['content_ready', 'image_ready'].includes(p.status)
-      );
-      if (pending.length > 0) {
-        const post = pending[pending.length - 1];
-        console.log(`[Pioneer Action] Post resuelto por sessionId fallback: ${post.id} (order: ${post.order_num})`);
-        return post;
-      }
-    }
-  }
-
-  console.error(`[Pioneer Action] No se pudo resolver post. postId=${params.postId}, planId=${params.planId}, sessionId=${params.sessionId}`);
-  return null;
-}
+const PIONEER_PROFILE_ID = '6984c371b984889d86a8b3d6';
 
 // === DISPATCHER ===
 
@@ -105,6 +67,10 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
   console.log(`[Pioneer Action] Ejecutando: ${req.action} (postId: ${req.params.postId || 'none'}, planId: ${req.params.planId || 'none'}, sessionId: ${req.params.sessionId || 'none'})`);
 
   switch (req.action) {
+    case 'approve_plan':
+      return handleApprovePlan(req.params);
+    case 'next_post':
+      return handleNextPost(req.params);
     case 'approve_text':
       return handleApproveText(req.params);
     case 'generate_image':
@@ -116,16 +82,158 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
     case 'regenerate_image':
       return handleGenerateImage(req.params);
     default:
-      return {
-        success: false,
-        message: `Acción no reconocida: ${req.action}`,
-        error: `unknown_action: ${req.action}`,
-      };
+      return { success: false, message: `Acción no reconocida: ${req.action}`, error: `unknown_action: ${req.action}` };
   }
 }
 
-// === APPROVE TEXT ===
-// Lee post de DB. Si tiene image_prompt → botones de imagen. Si no → publicar directo.
+// ═══════════════════════════════════════════════════════
+// APPROVE PLAN — Parsear plan, setup queue, crear DB
+// ═══════════════════════════════════════════════════════
+
+async function handleApprovePlan(params: ActionRequest['params']): Promise<ActionResponse> {
+  if (!params.sessionId) {
+    return { success: false, message: 'Error: no hay sesión activa.', error: 'no_session' };
+  }
+
+  if (!params.planText) {
+    return { success: false, message: 'Error: no se encontró el plan.', error: 'no_plan_text' };
+  }
+
+  try {
+    // 1. Llamar Claude API aislado para extraer datos estructurados del plan
+    console.log(`[Pioneer Action] approve_plan: Extrayendo datos del plan con Claude API...`);
+    const planData = await extractPlanData(params.planText);
+    console.log(`[Pioneer Action] Plan extraído: ${planData.posts.length} posts, slots: ${JSON.stringify(planData.slots)}`);
+
+    // 2. Setup queue en Late.dev
+    const formattedSlots = planData.slots.map(s => ({
+      dayOfWeek: s.day_of_week,
+      time: s.time,
+    }));
+
+    await setupQueueSlots(PIONEER_PROFILE_ID, PR_TIMEZONE, formattedSlots, true);
+    console.log(`[Pioneer Action] Queue configurado: ${formattedSlots.length} slots`);
+
+    // 3. Crear plan en DB
+    const dbPlan = await createPlan(params.sessionId, {
+      plan_name: planData.plan_name,
+      description: planData.description,
+      post_count: planData.posts.length,
+      queue_slots: formattedSlots,
+    });
+    console.log(`[Pioneer DB] Plan creado: ${dbPlan.id} (${planData.posts.length} posts)`);
+
+    // 4. Crear todos los posts en DB con status 'pending'
+    for (let i = 0; i < planData.posts.length; i++) {
+      const postInfo = planData.posts[i];
+      await createPost(dbPlan.id, {
+        order_num: i + 1,
+        title: postInfo.title,
+        content: '', // Se llena cuando se genera el texto
+      });
+    }
+    console.log(`[Pioneer DB] ${planData.posts.length} posts creados en DB (pending)`);
+
+    // 5. Calcular próximas fechas para mostrar al cliente
+    const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    const slotDesc = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`).join(', ');
+
+    return {
+      success: true,
+      message: `✅ ¡Plan aprobado! ${planData.posts.length} posts programados.\n\n📅 Horarios de publicación: ${slotDesc}\n\n¿Listo para crear el primer post?`,
+      buttons: [
+        { id: 'first_post', label: '▶️ Crear primer post', type: 'action', style: 'primary', action: 'next_post' },
+      ],
+      actionContext: {
+        planId: dbPlan.id,
+        sessionId: params.sessionId,
+      },
+    };
+  } catch (err) {
+    console.error(`[Pioneer Action] Error en approve_plan:`, err);
+    const msg = err instanceof LateApiError
+      ? `Error de Late.dev (HTTP ${err.status}): ${err.body}`
+      : err instanceof Error ? err.message : 'Error desconocido';
+    return { success: false, message: `Error configurando el plan: ${msg}`, error: 'plan_error' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// NEXT POST — Generar texto via Claude API aislado
+// ═══════════════════════════════════════════════════════
+
+async function handleNextPost(params: ActionRequest['params']): Promise<ActionResponse> {
+  // Resolver plan
+  let planId = params.planId;
+  if (!planId && params.sessionId) {
+    const plan = await getActivePlan(params.sessionId);
+    if (plan) planId = plan.id;
+  }
+
+  if (!planId) {
+    return { success: false, message: 'Error: no hay plan activo.', error: 'no_plan' };
+  }
+
+  // Buscar el siguiente post pendiente (sin content)
+  const posts = await getPostsByPlan(planId);
+  const nextPost = posts.find(p => !p.content || p.content === '');
+
+  if (!nextPost) {
+    return {
+      success: true,
+      message: '🎉 ¡Todos los posts del plan ya tienen contenido!',
+      buttons: [],
+    };
+  }
+
+  // Leer contexto del plan y negocio para la llamada Claude
+  const plan = await getActivePlan(params.sessionId || '');
+  const postNum = nextPost.order_num;
+  const totalPosts = posts.length;
+
+  console.log(`[Pioneer Action] next_post: Generando post ${postNum}/${totalPosts} (title: "${nextPost.title || 'sin título'}")`);
+
+  try {
+    // Llamada Claude API aislada para generar contenido
+    const result = await generatePostContent({
+      postTitle: nextPost.title || `Post #${postNum}`,
+      postNumber: postNum,
+      totalPosts,
+      conversationContext: params.conversationContext || '',
+    });
+
+    // Guardar en DB
+    await updatePost(nextPost.id, {
+      content: result.text,
+      image_prompt: result.imagePrompt,
+      image_model: 'schnell',
+      image_aspect_ratio: '1:1',
+      status: 'content_ready',
+    });
+    console.log(`[Pioneer DB] Post ${nextPost.id} actualizado con content (${result.text.length} chars) + imagePrompt: ${!!result.imagePrompt}`);
+
+    return {
+      success: true,
+      message: `**Post #${postNum} — ${nextPost.title || ''}:**\n\n---\n\n${result.text}\n\n---\n\n¿Le gusta este texto o prefiere algún cambio?`,
+      buttons: [
+        { id: 'approve_text', label: '✅ Me gusta', type: 'action', style: 'primary', action: 'approve_text' },
+        { id: 'change_text', label: '✏️ Pedir cambios', type: 'option', style: 'ghost', chatMessage: '' },
+      ],
+      actionContext: {
+        postId: nextPost.id,
+        planId,
+        sessionId: params.sessionId,
+      },
+    };
+  } catch (err) {
+    console.error(`[Pioneer Action] Error generando post:`, err);
+    return { success: false, message: `Error generando el post: ${err instanceof Error ? err.message : 'Error desconocido'}`, error: 'content_error' };
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// APPROVE TEXT — Mostrar opciones de imagen
+// ═══════════════════════════════════════════════════════
 
 async function handleApproveText(params: ActionRequest['params']): Promise<ActionResponse> {
   const post = await resolvePost(params);
@@ -164,8 +272,9 @@ async function handleApproveText(params: ActionRequest['params']): Promise<Actio
   };
 }
 
-// === GENERATE IMAGE ===
-// Lee image_prompt de DB. Genera con Replicate. Guarda URL en DB.
+// ═══════════════════════════════════════════════════════
+// GENERATE IMAGE
+// ═══════════════════════════════════════════════════════
 
 async function handleGenerateImage(params: ActionRequest['params']): Promise<ActionResponse> {
   const post = await resolvePost(params);
@@ -186,16 +295,11 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
     });
 
     if (!result.success || !result.images || result.images.length === 0) {
-      return {
-        success: false,
-        message: `Error generando imagen: ${result.error || 'Sin resultado'}`,
-        error: 'image_error',
-      };
+      return { success: false, message: `Error generando imagen: ${result.error || 'Sin resultado'}`, error: 'image_error' };
     }
 
     const imageUrl = result.images[0];
 
-    // Guardar URL en DB
     try {
       await updatePost(post.id, { image_url: imageUrl, status: 'image_ready' });
       console.log(`[Pioneer DB] Post ${post.id} actualizado con image_url`);
@@ -217,40 +321,34 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
         postId: post.id,
         planId: post.plan_id,
         sessionId: params.sessionId,
-        // imageUrls para el siguiente paso (approve_and_publish lee image_url de DB como fallback)
         imageUrls: result.images,
       },
     };
   } catch (err) {
-    return {
-      success: false,
-      message: `Error generando imagen: ${err instanceof Error ? err.message : 'Error desconocido'}`,
-      error: 'image_error',
-    };
+    return { success: false, message: `Error generando imagen: ${err instanceof Error ? err.message : 'Error desconocido'}`, error: 'image_error' };
   }
 }
 
-// === APPROVE AND PUBLISH ===
-// Lee CONTENT de DB. Lee IMAGE_URL de DB. Publica. Incrementa counter en DB.
-// Bug 5 IMPOSIBLE — content nunca viaja por el frontend.
+// ═══════════════════════════════════════════════════════
+// APPROVE AND PUBLISH
+// ═══════════════════════════════════════════════════════
 
 async function handleApproveAndPublish(params: ActionRequest['params']): Promise<ActionResponse> {
   const post = await resolvePost(params);
 
   if (!post || !post.content) {
-    console.error(`[Pioneer Action] approve_and_publish FAILED: post no encontrado o sin content. postId=${params.postId}, planId=${params.planId}, sessionId=${params.sessionId}`);
+    console.error(`[Pioneer Action] approve_and_publish FAILED: no post/content. postId=${params.postId}, planId=${params.planId}`);
     return { success: false, message: 'Error: no hay contenido para publicar.', error: 'missing_content' };
   }
 
   const content = post.content;
-  // imageUrls: primero de params (viene de generate_image en el mismo flujo), luego de DB
   const imageUrls = (params.imageUrls && params.imageUrls.length > 0)
     ? params.imageUrls
     : (post.image_url ? [post.image_url] : []);
 
   console.log(`[Pioneer Action] approve_and_publish: post=${post.id}, order=${post.order_num}, content="${content.substring(0, 80)}...", images=${imageUrls.length}`);
 
-  // --- Resolver plataformas (siempre de Late.dev API) ---
+  // Plataformas de Late.dev API
   let resolvedPlatforms: Array<{ platform: string; account_id: string }>;
   try {
     const accountsResult = await listAccounts();
@@ -262,14 +360,10 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
       account_id: acc._id,
     }));
   } catch (err) {
-    return {
-      success: false,
-      message: `Error verificando cuentas: ${err instanceof Error ? err.message : 'Error desconocido'}`,
-      error: 'accounts_error',
-    };
+    return { success: false, message: `Error verificando cuentas: ${err instanceof Error ? err.message : 'Error desconocido'}`, error: 'accounts_error' };
   }
 
-  // --- Crear draft ---
+  // Crear draft
   const draftInput = {
     content,
     platforms: resolvedPlatforms,
@@ -296,10 +390,8 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     return { success: false, message: `Error creando borrador: ${msg}`, error: 'draft_error' };
   }
 
-  // --- Activar draft via Queue ---
-  const PIONEER_PROFILE_ID = '6984c371b984889d86a8b3d6';
+  // Activar via Queue
   const activateData: Record<string, unknown> = {};
-
   if (params.publishNow) {
     activateData.publishNow = true;
   } else if (params.scheduledFor) {
@@ -315,10 +407,10 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     const timeLabel = activateData.publishNow
       ? 'publicado ahora'
       : activateData.scheduledFor
-        ? `programado para ${formatScheduledTime(activateData.scheduledFor as string)}`
+        ? `programado`
         : 'agregado a la cola de publicación';
 
-    // --- DB: marcar post como scheduled + incrementar counter ---
+    // DB: marcar post + incrementar counter
     const planId = post.plan_id;
     let postCount: number | null = null;
     let postsPublished: number | null = null;
@@ -326,7 +418,6 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
 
     try {
       await markPostScheduled(post.id, draftId);
-      console.log(`[Pioneer DB] Post ${post.id} marcado como scheduled`);
     } catch (dbErr) {
       console.error('[Pioneer DB] Error marcando post:', dbErr);
     }
@@ -351,12 +442,22 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
 
     console.log(`[Pioneer Action] ✅ Post ${timeLabel} (draft: ${draftId}) [${postsPublished ?? '?'}/${postCount ?? '?'}]`);
 
+    const platformNames = resolvedPlatforms.map(p => p.platform).join(', ');
+
     return {
       success: true,
       message: planComplete
-        ? `✅ Post ${timeLabel} en ${resolvedPlatforms.map(p => p.platform).join(', ')}.\n\n🎉 ¡Plan completado! Se publicaron los ${postCount} posts del plan.`
-        : `✅ Post ${timeLabel} en ${resolvedPlatforms.map(p => p.platform).join(', ')}. (${postsPublished}/${postCount ?? '?'})`,
-      buttons: planComplete ? buildPlanCompleteButtons() : buildNextPostButtons(),
+        ? `✅ Post ${timeLabel} en ${platformNames}.\n\n🎉 ¡Plan completado! Se publicaron los ${postCount} posts del plan.`
+        : `✅ Post ${timeLabel} en ${platformNames}. (${postsPublished}/${postCount ?? '?'})`,
+      buttons: planComplete
+        ? [
+            { id: 'more_posts', label: '➕ Crear más posts', type: 'option', style: 'secondary', chatMessage: 'Quiero crear más posts adicionales' },
+            { id: 'done', label: '✅ Listo, terminamos', type: 'option', style: 'primary', chatMessage: 'Listo, terminamos por ahora' },
+          ]
+        : [
+            { id: 'next_post', label: '▶️ Siguiente post', type: 'action', style: 'primary', action: 'next_post' },
+            { id: 'pause', label: '⏸️ Terminar por hoy', type: 'option', style: 'ghost', chatMessage: 'Pausar el plan por ahora' },
+          ],
       actionContext: {
         planId,
         sessionId: params.sessionId,
@@ -366,46 +467,173 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     const msg = err instanceof LateApiError
       ? `Error de Late.dev (HTTP ${err.status}): ${err.body}`
       : err instanceof Error ? err.message : 'Error desconocido';
-    return {
-      success: false,
-      message: `El borrador se creó pero no se pudo publicar: ${msg}. Puede intentar de nuevo.`,
-      error: 'activate_error',
-    };
+    return { success: false, message: `El borrador se creó pero no se pudo publicar: ${msg}`, error: 'activate_error' };
   }
 }
 
-// === HELPERS ===
+// ═══════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════
 
-function buildNextPostButtons(): ButtonConfig[] {
-  return [
-    { id: 'next_post', label: '▶️ Siguiente post', type: 'option', style: 'primary', chatMessage: 'Continuemos con el siguiente post' },
-    { id: 'pause', label: '⏸️ Terminar por hoy', type: 'option', style: 'ghost', chatMessage: 'Pausar el plan por ahora' },
-  ];
+// --- Resolver post de DB ---
+async function resolvePost(params: ActionRequest['params']) {
+  if (params.postId) {
+    const post = await getPost(params.postId);
+    if (post) {
+      console.log(`[Pioneer Action] Post resuelto: ${post.id} (order: ${post.order_num}, status: ${post.status})`);
+      return post;
+    }
+  }
+
+  if (params.planId) {
+    const posts = await getPostsByPlan(params.planId);
+    const pending = posts.filter(p => p.content && ['content_ready', 'image_ready'].includes(p.status));
+    if (pending.length > 0) {
+      const post = pending[pending.length - 1];
+      console.log(`[Pioneer Action] Post resuelto por planId: ${post.id} (order: ${post.order_num})`);
+      return post;
+    }
+  }
+
+  if (params.sessionId) {
+    const plan = await getActivePlan(params.sessionId);
+    if (plan) {
+      const posts = await getPostsByPlan(plan.id);
+      const pending = posts.filter(p => p.content && ['content_ready', 'image_ready'].includes(p.status));
+      if (pending.length > 0) {
+        const post = pending[pending.length - 1];
+        console.log(`[Pioneer Action] Post resuelto por sessionId: ${post.id} (order: ${post.order_num})`);
+        return post;
+      }
+    }
+  }
+
+  console.error(`[Pioneer Action] No se pudo resolver post. postId=${params.postId}, planId=${params.planId}, sessionId=${params.sessionId}`);
+  return null;
 }
 
-function buildPlanCompleteButtons(): ButtonConfig[] {
-  return [
-    { id: 'more_posts', label: '➕ Crear más posts', type: 'option', style: 'secondary', chatMessage: 'Quiero crear más posts adicionales' },
-    { id: 'done', label: '✅ Listo, terminamos', type: 'option', style: 'primary', chatMessage: 'Listo, terminamos por ahora' },
-  ];
+// --- Extraer datos estructurados del plan via Claude API ---
+interface PlanData {
+  plan_name: string;
+  description: string;
+  slots: Array<{ day_of_week: number; time: string }>;
+  posts: Array<{ title: string; post_type: string; details: string }>;
 }
 
-function formatScheduledTime(isoString: string): string {
+async function extractPlanData(planText: string): Promise<PlanData> {
+  const anthropic = new Anthropic();
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5-20250929',
+    max_tokens: 1000,
+    system: `Extract structured data from a marketing plan. Return ONLY valid JSON, no markdown, no explanation.
+
+The JSON must have this exact structure:
+{
+  "plan_name": "short name of the plan",
+  "description": "one sentence description",
+  "slots": [{"day_of_week": 1, "time": "12:00"}, ...],
+  "posts": [{"title": "Post title/theme", "post_type": "offer|educational|testimonial|behind-scenes|urgency|cta|branding|interactive", "details": "what this post should be about"}, ...]
+}
+
+Rules for slots:
+- day_of_week: 0=sunday, 1=monday, 2=tuesday, 3=wednesday, 4=thursday, 5=friday, 6=saturday
+- Extract the unique day+time combinations from the post schedule
+- time format: "HH:MM" in 24h (e.g., "19:00" for 7:00 PM, "12:00" for 12:00 PM)
+
+Rules for posts:
+- Extract each post in order
+- post_type should match the theme (promotional=offer, educational=educational, brand story=branding, etc.)
+- details should describe what the post is about including any specific promotions, topics, or angles mentioned`,
+    messages: [{
+      role: 'user',
+      content: planText,
+    }],
+  });
+
+  const block = response.content[0];
+  if (block.type !== 'text') throw new Error('Claude no devolvió texto');
+
+  // Limpiar JSON (puede venir con ```json ... ```)
+  let jsonStr = block.text.trim();
+  jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+
+  const parsed = JSON.parse(jsonStr) as PlanData;
+
+  // Validación básica
+  if (!parsed.posts || parsed.posts.length === 0) throw new Error('Plan sin posts');
+  if (!parsed.slots || parsed.slots.length === 0) throw new Error('Plan sin horarios');
+
+  return parsed;
+}
+
+// --- Generar contenido de post via Claude API aislada ---
+interface PostContent {
+  text: string;
+  imagePrompt: string | null;
+}
+
+async function generatePostContent(input: {
+  postTitle: string;
+  postNumber: number;
+  totalPosts: number;
+  conversationContext: string;
+}): Promise<PostContent> {
+  const anthropic = new Anthropic();
+
+  // Generar texto del post
+  const textResponse = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5-20250929',
+    max_tokens: 500,
+    system: `Eres un copywriter profesional de marketing para pequeños negocios en Puerto Rico.
+Escribe en español. Tono: profesional pero cercano.
+
+REGLAS DE CALIDAD — OBLIGATORIO:
+- Máximo 4-6 líneas de texto real + CTA + hashtags.
+- NUNCA listes más de 2-3 items.
+- Fórmula: Hook (1 línea) + Beneficio/Info (2-3 líneas) + CTA con contacto (1-2 líneas) + hashtags.
+- Incluye datos de contacto REALES si están en el contexto.
+- NUNCA inventes testimonios, marcas, precios, o datos no proporcionados.
+- NUNCA uses placeholders como [dirección] o [teléfono].
+- Escribe el post LISTO PARA PUBLICAR — no incluyas explicación ni título.
+- NO incluyas "Post #N" ni "---" ni nada que no sea el post.`,
+    messages: [{
+      role: 'user',
+      content: `Contexto del negocio y plan:\n${input.conversationContext}\n\nGenera el Post #${input.postNumber} de ${input.totalPosts}: "${input.postTitle}"\n\nEscribe SOLO el texto del post, listo para publicar.`,
+    }],
+  });
+
+  const textBlock = textResponse.content[0];
+  if (textBlock.type !== 'text') throw new Error('Claude no devolvió texto');
+  const text = textBlock.text.trim();
+
+  // Generar image prompt
+  let imagePrompt: string | null = null;
   try {
-    const match = isoString.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-    if (!match) return isoString;
-    const [, yearStr, monthStr, dayStr, hourStr, minuteStr] = match;
-    const prToUtcOffset = 4;
-    const utcDate = new Date(Date.UTC(
-      parseInt(yearStr), parseInt(monthStr) - 1, parseInt(dayStr),
-      parseInt(hourStr) + prToUtcOffset, parseInt(minuteStr)
-    ));
-    return utcDate.toLocaleString('es-PR', {
-      weekday: 'long', day: 'numeric', month: 'long',
-      hour: 'numeric', minute: '2-digit', hour12: true,
-      timeZone: PR_TIMEZONE,
+    const imgResponse = await anthropic.messages.create({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 200,
+      system: `You generate image prompts for FLUX (Replicate) to create social media marketing images.
+Rules:
+- Output ONLY the prompt, nothing else. No quotes, no explanation.
+- Always in English.
+- Always end with "no text overlay" (FLUX is bad at text).
+- Style: professional, vibrant, high quality, social media ready.
+- Keep it under 100 words.`,
+      messages: [{
+        role: 'user',
+        content: `Generate an image prompt for this social media post:\n\n${text}`,
+      }],
     });
-  } catch {
-    return isoString;
+
+    const imgBlock = imgResponse.content[0];
+    if (imgBlock.type === 'text') {
+      imagePrompt = imgBlock.text.trim();
+      console.log(`[Pioneer Action] Image prompt: "${imagePrompt.substring(0, 60)}..."`);
+    }
+  } catch (err) {
+    console.warn(`[Pioneer Action] No se pudo generar image prompt:`, err);
   }
+
+  return { text, imagePrompt };
 }

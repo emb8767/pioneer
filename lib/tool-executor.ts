@@ -32,8 +32,7 @@ import {
   // Queue functions
   setupQueueSlots,
 } from '@/lib/late-client';
-import { generateContent } from '@/lib/content-generator';
-import { createPlan, createPost, getActivePlan, getPostsByPlan } from '@/lib/db';
+// generate_content and setup_queue moved to action-handler (Fase 5)
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import type { Platform } from '@/lib/types';
 
@@ -161,135 +160,10 @@ export async function executeTool(
         }));
       }
 
-      case 'generate_content': {
-        const input = toolInput as {
-          business_name: string;
-          business_type: string;
-          post_type: string;
-          details: string;
-          platforms: string[];
-          tone?: string;
-          include_hashtags?: boolean;
-        };
-        const result = await generateContent({
-          business_name: input.business_name,
-          business_type: input.business_type,
-          post_type: input.post_type,
-          details: input.details,
-          platforms: input.platforms,
-          tone: input.tone || 'professional',
-          include_hashtags: input.include_hashtags !== false,
-        });
+      // === generate_content y setup_queue ELIMINADAS (Fase 5) ===
+      // Ahora las ejecuta action-handler directamente.
 
-        // === DB: Crear post en la base de datos ===
-        let postId: string | null = null;
-        console.log(`[Pioneer DB] generate_content: sessionId=${sessionId || 'null'}, hasText=${!!result.content?.text}`);
-        if (sessionId && result.content?.text) {
-          try {
-            const activePlan = await getActivePlan(sessionId);
-            console.log(`[Pioneer DB] getActivePlan: ${activePlan ? `id=${activePlan.id}, status=${activePlan.status}` : 'NOT FOUND'}`);
-            if (activePlan) {
-              const existingPosts = await getPostsByPlan(activePlan.id);
-              const orderNum = existingPosts.length + 1;
-              console.log(`[Pioneer DB] Creating post order=${orderNum} for plan=${activePlan.id}`);
-
-              const dbPost = await createPost(activePlan.id, {
-                order_num: orderNum,
-                content: result.content.text,
-                image_prompt: result.imageSpec?.prompt,
-                image_model: result.imageSpec?.model || 'schnell',
-                image_aspect_ratio: result.imageSpec?.aspect_ratio || '1:1',
-              });
-              postId = dbPost.id;
-              console.log(`[Pioneer DB] Post creado: ${postId} (order: ${orderNum}, plan: ${activePlan.id})`);
-            } else {
-              console.error(`[Pioneer DB] NO HAY PLAN ACTIVO para sessionId=${sessionId} — post NO guardado en DB`);
-            }
-          } catch (dbErr) {
-            console.error('[Pioneer DB] Error creando post:', dbErr);
-          }
-        }
-
-        // Incluir postId en el resultado para que draft-guardian lo capture
-        const resultWithDb = {
-          ...result,
-          ...(postId && { postId }),
-        };
-
-        return defaultResult(JSON.stringify(resultWithDb));
-      }
-
-      // === TOOL: Queue ===
-
-      case 'setup_queue': {
-        const input = toolInput as {
-          slots: Array<{ day_of_week: number; time: string }>;
-          post_count?: number;
-          profile_id?: string;
-        };
-
-        const profileId = input.profile_id || '6984c371b984889d86a8b3d6';
-
-        try {
-          const formattedSlots = input.slots.map(s => ({
-            dayOfWeek: s.day_of_week,
-            time: s.time,
-          }));
-
-          await setupQueueSlots(profileId, PR_TIMEZONE, formattedSlots, true);
-
-          // Calcular las próximas N fechas reales basándose en los slots configurados
-          const postCount = input.post_count || formattedSlots.length;
-          const upcomingDates = calculateUpcomingSlotDates(formattedSlots, postCount, PR_TIMEZONE);
-
-          const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-          const slotDescriptions = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`);
-
-          // === DB: Crear plan en la base de datos ===
-          let planId: string | null = null;
-          if (sessionId) {
-            try {
-              const dbPlan = await createPlan(sessionId, {
-                post_count: postCount,
-                queue_slots: formattedSlots,
-              });
-              planId = dbPlan.id;
-              console.log(`[Pioneer DB] Plan creado: ${planId} (posts: ${postCount}, session: ${sessionId})`);
-            } catch (dbErr) {
-              console.error('[Pioneer DB] Error creando plan:', dbErr);
-              // No bloquear el flujo — queue ya está configurado en Late.dev
-            }
-          } else {
-            console.warn('[Pioneer DB] No hay sessionId — plan no guardado en DB');
-          }
-
-          return defaultResult(JSON.stringify({
-            success: true,
-            message: `Cola de publicación configurada: ${slotDescriptions.join(', ')}.`,
-            slots: formattedSlots,
-            timezone: PR_TIMEZONE,
-            profile_id: profileId,
-            upcoming_dates: upcomingDates,
-            instructions: 'USA estas fechas exactas en el plan. Son las fechas REALES en que se publicarán los posts. NO inventes otras fechas.',
-            // DB info
-            ...(planId && { planId }),
-          }));
-        } catch (error) {
-          console.error('[Pioneer] Error configurando queue:', error);
-          const errorMessage = error instanceof LateApiError
-            ? `Error de Late.dev (HTTP ${error.status}): ${error.body}`
-            : error instanceof Error ? error.message : 'Error desconocido';
-
-          return defaultResult(JSON.stringify({
-            success: false,
-            error: `Error configurando cola de publicación: ${errorMessage}`,
-          }));
-        }
-      }
-
-      // ============================================================
       // === TOOLS: OAuth Headless ===
-      // ============================================================
 
       case 'get_pending_connection': {
         const pending = pendingOAuthData;

@@ -419,6 +419,28 @@ export default function ChatPage() {
       imageUrls: mergedContext.imageUrls,
     };
 
+    // Para approve_plan: enviar el texto del plan (mensaje anterior de Claude)
+    if (button.action === 'approve_plan') {
+      // Buscar el mensaje de Claude que contiene el plan
+      for (let i = messageIndex; i >= 0; i--) {
+        if (messages[i]?.role === 'assistant' && messages[i]?.content?.includes('Posts:')) {
+          params.planText = messages[i].content;
+          break;
+        }
+      }
+    }
+
+    // Para next_post: enviar contexto de conversación (para que Claude genere buen contenido)
+    if (button.action === 'next_post') {
+      // Recopilar contexto: últimos mensajes relevantes de la conversación
+      const contextMessages = messages
+        .filter(m => m.role === 'assistant' || m.role === 'user')
+        .slice(0, 20) // Primeros 20 mensajes (incluye entrevista + plan)
+        .map(m => `${m.role === 'user' ? 'Cliente' : 'Pioneer'}: ${m.content.substring(0, 500)}`)
+        .join('\n\n');
+      params.conversationContext = contextMessages;
+    }
+
     try {
       const response = await fetch('/api/chat/action', {
         method: 'POST',
