@@ -137,6 +137,8 @@ async function handleApproveText(params: ActionRequest['params']): Promise<Actio
         postId: params.postId,
         planId: params.planId,
         sessionId: params.sessionId,
+        // Content como fallback (DB es fuente de verdad via postId)
+        content: params.content,
         // Image spec para generate_image
         imagePrompt: params.imagePrompt,
         imageModel: params.imageModel,
@@ -165,6 +167,7 @@ async function handleApproveText(params: ActionRequest['params']): Promise<Actio
       postId: params.postId,
       planId: params.planId,
       sessionId: params.sessionId,
+      content: params.content,
       platforms: params.platforms,
     },
   };
@@ -267,6 +270,8 @@ async function handleGenerateImage(params: ActionRequest['params']): Promise<Act
         postId: params.postId,
         planId: params.planId,
         sessionId: params.sessionId,
+        // Content como fallback (DB es fuente de verdad via postId)
+        content: params.content,
         // Image data
         imageUrls: allImages,
         imagePrompt,

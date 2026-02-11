@@ -408,7 +408,19 @@ export default function ChatPage() {
       if (!mergedContext.planId && prevCtx.planId) {
         mergedContext.planId = prevCtx.planId;
       }
-      // postId NO se hereda entre posts (cada post tiene su propio ID)
+      // postId se hereda dentro del mismo post (pero no entre posts diferentes)
+      if (!mergedContext.postId && prevCtx.postId) {
+        mergedContext.postId = prevCtx.postId;
+      }
+
+      // Content se hereda SOLO dentro del mismo post (previene Bug 5)
+      // Si prevCtx tiene un postId diferente, no heredar su content
+      if (!mergedContext.content && prevCtx.content) {
+        const samePost = !prevCtx.postId || !mergedContext.postId || prevCtx.postId === mergedContext.postId;
+        if (samePost) {
+          mergedContext.content = prevCtx.content;
+        }
+      }
 
       // Platforms se heredan
       if (!mergedContext.platforms && prevCtx.platforms) {

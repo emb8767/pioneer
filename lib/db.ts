@@ -130,6 +130,8 @@ export async function createPlan(
       description: planData.description,
       post_count: planData.post_count,
       queue_slots: planData.queue_slots || [],
+      status: 'approved',
+      approved_at: new Date().toISOString(),
     })
     .select()
     .single();
