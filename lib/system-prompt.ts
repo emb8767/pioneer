@@ -94,7 +94,12 @@ function getUpcomingDates(): string {
 // v12 cambios:
 // - FIX #3: Eliminada pregunta redundante "¿quiere imagen?" — Claude llama describe_image directamente
 // - FIX #4: Instrucciones de recuperación cuando cliente reporta error de imagen
-export function buildSystemPrompt(): string {
+export function buildSystemPrompt(sessionContext?: {
+  businessName: string | null;
+  businessInfo: Record<string, unknown>;
+  status: string;
+  planSummary?: { name: string | null; postCount: number; postsPublished: number } | null;
+}): string {
   const fechaActual = getCurrentDateForPrompt();
   const upcomingDates = getUpcomingDates();
 
@@ -108,11 +113,39 @@ export function buildSystemPrompt(): string {
     marketingSkill = 'Skill de marketing no disponible. Actúa como agente de marketing profesional. Pregunta nombre, tipo, ubicación, teléfono y objetivo del negocio antes de crear un plan. NUNCA inventes datos.';
   }
 
+  // Construir sección de contexto de sesión existente
+  let sessionSection = '';
+  if (sessionContext && sessionContext.businessInfo && Object.keys(sessionContext.businessInfo).length > 0) {
+    const info = sessionContext.businessInfo;
+    const fields = Object.entries(info)
+      .filter(([, v]) => v !== null && v !== undefined && v !== '')
+      .map(([k, v]) => `- ${k}: ${v}`)
+      .join('\n');
+
+    sessionSection = `
+=== CLIENTE EXISTENTE — NO REPETIR ENTREVISTA ===
+Este cliente ya completó la entrevista. Tienes sus datos:
+
+Negocio: ${sessionContext.businessName || info.business_name || 'No especificado'}
+${fields}
+
+⚠️ INSTRUCCIONES PARA CLIENTE QUE REGRESA:
+- NO repitas la entrevista — ya tienes toda la información
+- Saluda al cliente por el nombre de su negocio
+- Ofrece opciones: crear nuevo plan, revisar plan actual, ajustar estrategia
+- Si tiene un plan activo, menciona el progreso
+${sessionContext.planSummary ? `
+Plan activo: "${sessionContext.planSummary.name || 'Sin nombre'}"
+Progreso: ${sessionContext.planSummary.postsPublished}/${sessionContext.planSummary.postCount} posts publicados
+` : '- No tiene plan activo actualmente'}
+`;
+  }
+
   return `Eres Pioneer, un asistente de marketing digital para pequeños negocios en Puerto Rico.
 
 Fecha y hora actual: ${fechaActual}
 ${upcomingDates}
-=== IDENTIDAD ===
+${sessionSection}=== IDENTIDAD ===
 - Nombre: Pioneer
 - Rol: Estratega de marketing que reemplaza a un especialista humano
 - Idioma: Español formal (siempre "usted")

@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { messages, pendingOAuthData, guardianState } = parsed.data;
+    const { messages, pendingOAuthData, guardianState, sessionContext } = parsed.data;
 
     // ═══════════════════════════════════════
     // RUNG 2: Loop de conversación + guardian
@@ -35,7 +35,8 @@ export async function POST(request: NextRequest) {
     const result = await runConversationLoop(
       messages,
       pendingOAuthData,
-      guardianState
+      guardianState,
+      sessionContext || undefined
     );
 
     // ═══════════════════════════════════════

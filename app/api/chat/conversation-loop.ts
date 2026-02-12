@@ -22,6 +22,8 @@ import {
 } from './draft-guardian';
 import type { GuardianState } from './draft-guardian';
 
+import type { SessionContext } from './request-parser';
+
 // Inicializar cliente de Anthropic (singleton a nivel módulo)
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -55,7 +57,8 @@ function getLastUserMessage(messages: Anthropic.MessageParam[]): string {
 export async function runConversationLoop(
   initialMessages: Anthropic.MessageParam[],
   pendingOAuthData: OAuthPendingData | null,
-  guardianState: GuardianState
+  guardianState: GuardianState,
+  sessionContext?: SessionContext
 ): Promise<ConversationResult> {
 
   let currentMessages = [...initialMessages];
@@ -65,7 +68,7 @@ export async function runConversationLoop(
   // Protección ④: limitar a 2 retries para evitar loop infinito
   let approvalForceRetryCount = 0;
 
-  const systemPrompt = buildSystemPrompt();
+  const systemPrompt = buildSystemPrompt(sessionContext);
 
   // Extraer el último mensaje del usuario REAL (no mensajes inyectados por guardian)
   const lastUserMessage = getLastUserMessage(initialMessages);

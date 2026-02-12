@@ -241,6 +241,7 @@ export default function ChatPage() {
   const [actionLoading, setActionLoading] = useState<number | null>(null); // index del msg con acción en curso
   const [pendingConnectionHandled, setPendingConnectionHandled] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null); // DB session ID
+  const [sessionChecked, setSessionChecked] = useState(false); // si ya se verificó sesión guardada
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -249,21 +250,58 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Mensaje de bienvenida
+  // Verificar sesión guardada en localStorage al cargar
   useEffect(() => {
-    setMessages((prev) => {
-      if (prev.length === 0) {
-        return [
-          {
+    if (sessionChecked) return;
+    setSessionChecked(true);
+
+    const savedSessionId = localStorage.getItem('pioneer_session_id');
+    if (!savedSessionId) {
+      // No hay sesión guardada — mostrar bienvenida normal
+      setMessages([{
+        role: 'assistant',
+        content: '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
+      }]);
+      return;
+    }
+
+    // Verificar si la sesión existe y tiene datos
+    fetch(`/api/chat/session?id=${savedSessionId}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.exists) {
+          setSessionId(data.sessionId);
+          console.log(`[Pioneer] Sesión restaurada: ${data.sessionId} (${data.businessName})`);
+
+          // Bienvenida personalizada
+          let welcomeBack = `¡Bienvenido de vuelta! Tengo guardada la información de **${data.businessName}**.`;
+          if (data.plan) {
+            welcomeBack += `\n\nSu plan "${data.plan.name}" tiene ${data.plan.postsPublished}/${data.plan.postCount} posts publicados.`;
+          }
+          welcomeBack += '\n\n¿Qué le gustaría hacer hoy?';
+
+          setMessages([{
             role: 'assistant',
-            content:
-              '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
-          },
-        ];
-      }
-      return prev;
-    });
-  }, []);
+            content: welcomeBack,
+            actionContext: { sessionId: data.sessionId, planId: data.plan?.id },
+          }]);
+        } else {
+          // Sesión expirada o inválida — limpiar y mostrar bienvenida normal
+          localStorage.removeItem('pioneer_session_id');
+          setMessages([{
+            role: 'assistant',
+            content: '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
+          }]);
+        }
+      })
+      .catch(() => {
+        // Error de red — mostrar bienvenida normal
+        setMessages([{
+          role: 'assistant',
+          content: '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
+          }]);
+      });
+  }, [sessionChecked]);
 
   // === DETECTAR ?pending_connection EN LA URL ===
   useEffect(() => {
@@ -319,7 +357,8 @@ export default function ChatPage() {
       // Capturar sessionId de la respuesta (si el backend lo creó)
       if (data.sessionId && !sessionId) {
         setSessionId(data.sessionId);
-        console.log(`[Pioneer] SessionId recibido: ${data.sessionId}`);
+        localStorage.setItem('pioneer_session_id', data.sessionId);
+        console.log(`[Pioneer] SessionId recibido y guardado: ${data.sessionId}`);
       }
 
       // Construir actionContext de la respuesta

@@ -15,14 +15,22 @@ import { getOAuthCookie } from '@/lib/oauth-cookie';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import { createGuardianState } from './draft-guardian';
 import type { GuardianState } from './draft-guardian';
-import { createSession, getSession } from '@/lib/db';
+import { createSession, getSession, getActivePlan, getPlanProgress } from '@/lib/db';
 
 // === RESULTADO DEL PARSING ===
+export interface SessionContext {
+  businessName: string | null;
+  businessInfo: Record<string, unknown>;
+  status: string;
+  planSummary?: { name: string | null; postCount: number; postsPublished: number } | null;
+}
+
 export interface ParsedRequest {
   messages: Anthropic.MessageParam[];
   pendingOAuthData: OAuthPendingData | null;
   guardianState: GuardianState;
   sessionId: string | null;
+  sessionContext?: SessionContext | null;
 }
 
 export interface ParseError {
@@ -79,6 +87,7 @@ export async function parseRequest(request: NextRequest): Promise<ParseResult> {
 
   // 4. Resolver sessionId — validar existente o crear nuevo
   let sessionId: string | null = null;
+  let sessionContext: SessionContext | null = null;
   try {
     if (incomingSessionId) {
       // Validar que el sessionId existe en DB
@@ -86,6 +95,32 @@ export async function parseRequest(request: NextRequest): Promise<ParseResult> {
       if (session) {
         sessionId = session.id;
         console.log(`[Pioneer] Session existente: ${sessionId}`);
+
+        // Cargar contexto si tiene business_info
+        if (session.business_info && Object.keys(session.business_info).length > 0) {
+          sessionContext = {
+            businessName: session.business_name,
+            businessInfo: session.business_info,
+            status: session.status,
+          };
+
+          // Buscar plan activo
+          try {
+            const plan = await getActivePlan(sessionId);
+            if (plan) {
+              const progress = await getPlanProgress(plan.id);
+              sessionContext.planSummary = {
+                name: plan.plan_name,
+                postCount: plan.post_count,
+                postsPublished: progress.posts_published,
+              };
+            }
+          } catch {
+            // No bloquear si falla la búsqueda del plan
+          }
+
+          console.log(`[Pioneer] Session con business_info cargado: ${session.business_name}`);
+        }
       } else {
         console.warn(`[Pioneer] SessionId inválido: ${incomingSessionId} — creando nuevo`);
         const newSession = await createSession();
@@ -113,6 +148,7 @@ export async function parseRequest(request: NextRequest): Promise<ParseResult> {
       pendingOAuthData,
       guardianState,
       sessionId,
+      sessionContext,
     },
   };
 }
