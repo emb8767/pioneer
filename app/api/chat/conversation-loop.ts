@@ -10,6 +10,7 @@
 //
 // Fase DB-1: sessionId del guardianState se pasa a executeTool para operaciones DB.
 
+import Anthropic from '@anthropic-ai/sdk';
 import { getAnthropicClient, MODEL } from '@/lib/anthropic';
 import { buildSystemPrompt } from '@/lib/system-prompt';
 import { PIONEER_TOOLS } from '@/lib/tool-definitions';
