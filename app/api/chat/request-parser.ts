@@ -109,11 +109,13 @@ export async function parseRequest(request: NextRequest): Promise<ParseResult> {
             const plan = await getActivePlan(sessionId);
             if (plan) {
               const progress = await getPlanProgress(plan.id);
-              sessionContext.planSummary = {
-                name: plan.plan_name,
-                postCount: plan.post_count,
-                postsPublished: progress.posts_published,
-              };
+              if (progress) {
+                sessionContext.planSummary = {
+                  name: plan.plan_name,
+                  postCount: plan.post_count,
+                  postsPublished: progress.postsPublished,
+                };
+              }
             }
           } catch {
             // No bloquear si falla la búsqueda del plan
