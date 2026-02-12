@@ -1,25 +1,5 @@
 // Tipos compartidos para Pioneer Agent
 
-// === PLATFORM CHARACTER LIMITS ===
-// Moved from content-generator.ts (Fase 5 cleanup)
-// Used by publish-validator.ts for content validation
-
-export const PLATFORM_CHAR_LIMITS: Record<Platform, number> = {
-  twitter: 280,
-  instagram: 2200,
-  facebook: 63206,
-  linkedin: 3000,
-  tiktok: 2200,
-  youtube: 5000,
-  pinterest: 500,
-  reddit: 40000,
-  bluesky: 300,
-  threads: 500,
-  googlebusiness: 1500,
-  telegram: 4096,
-  snapchat: 250,
-};
-
 // === CONTENT WRITER ===
 
 export type PostType =

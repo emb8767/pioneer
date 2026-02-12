@@ -13,7 +13,7 @@ import {
   PR_TIMEZONE,
   LateApiError,
 } from '@/lib/late-client';
-import { PLATFORM_CHAR_LIMITS } from '@/lib/types';
+import { PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
 import type { Platform, LatePlatformTarget, LatePost } from '@/lib/types';
 
 // === LIMPIAR MARKDOWN Y FORMATO PARA REDES SOCIALES ===

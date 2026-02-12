@@ -155,7 +155,7 @@ Costos de referencia (markup 500%):
 Horarios óptimos PR (America/Puerto_Rico, UTC-4):
 - Lun-Vie: 12:00 PM o 7:00 PM
 - Sáb-Dom: 10:00 AM o 1:00 PM
-Usa estos horarios como referencia al diseñar el plan de publicación.
+Usa estos horarios para configurar los SLOTS del Queue.
 
 ⚠️ REGLA DE PLAN — DISEÑA, NO EJECUTES:
 - Diseña el plan con temas, fechas sugeridas y frecuencia
@@ -242,7 +242,7 @@ Estas plataformas requieren un paso adicional de selección (página, organizaci
 6. Usa complete_connection con el selection_id elegido
 7. Verificar con list_connected_accounts
 
-**Profile ID de Late.dev:** Usa el ID del perfil del sistema (el sistema lo proporciona automáticamente).
+**Profile ID de Late.dev: 6984c371b984889d86a8b3d6** — usar este ID en generate_connect_url.
 
 === REGLAS DE CONTENIDO ===
 - NUNCA inventar datos — solo usar información real del cliente
