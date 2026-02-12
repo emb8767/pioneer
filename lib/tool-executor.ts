@@ -114,7 +114,7 @@ export async function executeTool(
               const liResult = await getLinkedInPendingData(pendingDataToken);
               const liOptions = [
                 { id: 'personal', name: `Perfil personal: ${liResult.userProfile.displayName || 'Usuario'}` },
-                ...liResult.organizations.map(org => ({ id: org.id, name: `Empresa: ${org.name}` })),
+                ...(liResult.organizations || []).map(org => ({ id: org.id, name: `Empresa: ${org.name}` })),
               ];
               return defaultResult(JSON.stringify({
                 success: true, platform, step, options_type: 'profiles', options: liOptions,
