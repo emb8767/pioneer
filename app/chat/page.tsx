@@ -428,6 +428,13 @@ export default function ChatPage() {
           break;
         }
       }
+      // También enviar conversationContext para extraer business_info
+      const contextMessages = messages
+        .filter(m => m.role === 'assistant' || m.role === 'user')
+        .slice(0, 20)
+        .map(m => `${m.role === 'user' ? 'Cliente' : 'Pioneer'}: ${m.content.substring(0, 500)}`)
+        .join('\n\n');
+      params.conversationContext = contextMessages;
     }
 
     // Para next_post: enviar contexto de conversación (para que Claude genere buen contenido)

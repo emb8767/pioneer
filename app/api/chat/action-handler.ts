@@ -30,6 +30,8 @@ import {
   incrementPostsPublished,
   markPostScheduled,
   getPlanProgress,
+  updateSession,
+  getSession,
 } from '@/lib/db';
 import type { ButtonConfig } from './button-detector';
 
@@ -134,7 +136,16 @@ async function handleApprovePlan(params: ActionRequest['params']): Promise<Actio
     }
     console.log(`[Pioneer DB] ${planData.posts.length} posts creados en DB (pending)`);
 
-    // 5. Calcular próximas fechas para mostrar al cliente
+    // 5b. Extraer y guardar business_info de la conversación (para persistencia entre sesiones)
+    if (params.conversationContext) {
+      try {
+        await extractAndSaveBusinessInfo(params.sessionId, params.conversationContext);
+      } catch (bizErr) {
+        console.warn('[Pioneer Action] No se pudo guardar business_info (no-fatal):', bizErr);
+      }
+    }
+
+    // 6. Calcular próximas fechas para mostrar al cliente
     const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
     const slotDesc = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`).join(', ');
 
@@ -193,13 +204,30 @@ async function handleNextPost(params: ActionRequest['params']): Promise<ActionRe
 
   console.log(`[Pioneer Action] next_post: Generando post ${postNum}/${totalPosts} (title: "${nextPost.title || 'sin título'}")`);
 
+  // Enriquecer contexto con business_info de DB (si existe)
+  let enrichedContext = params.conversationContext || '';
+  if (params.sessionId) {
+    try {
+      const session = await getSession(params.sessionId);
+      if (session && session.business_info && Object.keys(session.business_info).length > 0) {
+        const bizInfo = Object.entries(session.business_info)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('\n');
+        enrichedContext = `=== DATOS DEL NEGOCIO (base de datos) ===\n${bizInfo}\n\n${enrichedContext}`;
+        console.log(`[Pioneer Action] Business context inyectado desde DB (${bizInfo.length} chars)`);
+      }
+    } catch (dbErr) {
+      console.warn('[Pioneer Action] No se pudo leer business_info de DB:', dbErr);
+    }
+  }
+
   try {
     // Llamada Claude API aislada para generar contenido
     const result = await generatePostContent({
       postTitle: nextPost.title || `Post #${postNum}`,
       postNumber: postNum,
       totalPosts,
-      conversationContext: params.conversationContext || '',
+      conversationContext: enrichedContext,
     });
 
     // Guardar en DB
@@ -636,4 +664,53 @@ Rules:
   }
 
   return { text, imagePrompt };
+}
+
+// --- Extraer business_info de la conversación y guardar en DB ---
+async function extractAndSaveBusinessInfo(sessionId: string, conversationContext: string): Promise<void> {
+  const anthropic = new Anthropic();
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5-20250929',
+    max_tokens: 500,
+    system: `Extract business information from a conversation between a marketing agent and a client. Return ONLY valid JSON, no markdown, no explanation.
+
+The JSON must have this structure (omit fields not mentioned in the conversation):
+{
+  "business_name": "name of the business",
+  "business_type": "type/industry",
+  "location": "city, area, or address",
+  "phone": "phone number",
+  "hours": "business hours",
+  "years_in_business": "how long they've been operating",
+  "how_clients_arrive": "how customers find them",
+  "goal": "what they want to achieve with marketing",
+  "differentiator": "what makes them unique or what clients value most",
+  "has_done_marketing": "yes/no and what type",
+  "current_promotion": "any active promotions",
+  "services": "main services offered",
+  "target_audience": "who their customers are",
+  "additional_info": "any other relevant details"
+}`,
+    messages: [{
+      role: 'user',
+      content: conversationContext,
+    }],
+  });
+
+  const block = response.content[0];
+  if (block.type !== 'text') return;
+
+  let jsonStr = block.text.trim();
+  jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+
+  const businessInfo = JSON.parse(jsonStr);
+
+  await updateSession(sessionId, {
+    business_name: businessInfo.business_name || null,
+    business_info: businessInfo,
+    status: 'active',
+  });
+
+  console.log(`[Pioneer DB] Business info guardado para session ${sessionId}: ${JSON.stringify(businessInfo).substring(0, 200)}...`);
 }
