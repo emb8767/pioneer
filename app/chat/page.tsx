@@ -423,7 +423,7 @@ export default function ChatPage() {
     if (button.action === 'approve_plan') {
       // Buscar el mensaje de Claude que contiene el plan
       for (let i = messageIndex; i >= 0; i--) {
-        if (messages[i]?.role === 'assistant' && messages[i]?.content?.includes('Posts:')) {
+        if (messages[i]?.role === 'assistant' && /posts/i.test(messages[i]?.content || '')) {
           params.planText = messages[i].content;
           break;
         }
