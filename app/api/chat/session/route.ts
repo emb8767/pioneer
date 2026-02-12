@@ -27,13 +27,15 @@ export async function GET(request: NextRequest) {
       const plan = await getActivePlan(sessionId);
       if (plan) {
         const progress = await getPlanProgress(plan.id);
-        planSummary = {
-          id: plan.id,
-          name: plan.plan_name,
-          postCount: plan.post_count,
-          postsPublished: progress.posts_published,
-          status: plan.status,
-        };
+        if (progress) {
+          planSummary = {
+            id: plan.id,
+            name: plan.plan_name,
+            postCount: plan.post_count,
+            postsPublished: progress.postsPublished,
+            status: plan.status,
+          };
+        }
       }
     } catch {
       // No bloquear si falla la búsqueda del plan
