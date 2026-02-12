@@ -12,7 +12,7 @@
 // 6. publish_no_image    → igual sin media
 // 7. regenerate_image    → nueva imagen con spec de DB
 
-import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient, MODEL } from '@/lib/anthropic';
 import {
   validateAndPrepareDraft,
   createDraftWithRetry,
@@ -30,6 +30,7 @@ import {
   incrementPostsPublished,
   markPostScheduled,
   getPlanProgress,
+  getSession,
 } from '@/lib/db';
 import type { ButtonConfig } from './button-detector';
 
@@ -200,6 +201,7 @@ async function handleNextPost(params: ActionRequest['params']): Promise<ActionRe
       postNumber: postNum,
       totalPosts,
       conversationContext: params.conversationContext || '',
+      sessionId: params.sessionId,
     });
 
     // Guardar en DB
@@ -521,10 +523,10 @@ interface PlanData {
 }
 
 async function extractPlanData(planText: string): Promise<PlanData> {
-  const anthropic = new Anthropic();
+  const anthropic = getAnthropicClient();
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5-20250929',
+    model: MODEL,
     max_tokens: 1000,
     system: `Extract structured data from a marketing plan. Return ONLY valid JSON, no markdown, no explanation.
 
@@ -578,12 +580,59 @@ async function generatePostContent(input: {
   postNumber: number;
   totalPosts: number;
   conversationContext: string;
+  sessionId?: string;
 }): Promise<PostContent> {
-  const anthropic = new Anthropic();
+  const anthropic = getAnthropicClient();
+
+  // === BUSINESS CONTEXT FROM DB ===
+  // Read business_info and interview_data from session to give the copywriter
+  // real data about the business. This prevents placeholder text and invented data.
+  let businessContext = '';
+  if (input.sessionId) {
+    try {
+      const session = await getSession(input.sessionId);
+      if (session) {
+        const info = session.business_info || {};
+        const interview = session.interview_data || {};
+        const parts: string[] = [];
+
+        if (session.business_name) parts.push(`Negocio: ${session.business_name}`);
+        if (info.business_type) parts.push(`Tipo: ${info.business_type}`);
+        if (info.location) parts.push(`Ubicación: ${info.location}`);
+        if (info.phone) parts.push(`Teléfono: ${info.phone}`);
+        if (info.hours) parts.push(`Horario: ${info.hours}`);
+        if (info.services) parts.push(`Servicios: ${info.services}`);
+        if (info.target_audience) parts.push(`Público objetivo: ${info.target_audience}`);
+        if (info.differentiator) parts.push(`Diferenciador: ${info.differentiator}`);
+        if (info.goals) parts.push(`Objetivos: ${info.goals}`);
+
+        // Include raw interview Q&A if available
+        if (Object.keys(interview).length > 0) {
+          parts.push(`\nDatos de la entrevista:\n${JSON.stringify(interview, null, 2)}`);
+        }
+
+        if (session.strategies && session.strategies.length > 0) {
+          parts.push(`Estrategias seleccionadas: ${session.strategies.join(', ')}`);
+        }
+
+        if (parts.length > 0) {
+          businessContext = parts.join('\n');
+          console.log(`[Pioneer Action] Business context loaded from DB (${businessContext.length} chars)`);
+        }
+      }
+    } catch (err) {
+      console.warn('[Pioneer Action] Could not load business context from DB:', err);
+    }
+  }
+
+  // Combine DB business context with conversation context as fallback
+  const fullContext = businessContext
+    ? `=== DATOS DEL NEGOCIO (fuente: base de datos) ===\n${businessContext}\n\n=== CONTEXTO ADICIONAL ===\n${input.conversationContext}`
+    : input.conversationContext;
 
   // Generar texto del post
   const textResponse = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5-20250929',
+    model: MODEL,
     max_tokens: 500,
     system: `Eres un copywriter profesional de marketing para pequeños negocios en Puerto Rico.
 Escribe en español. Tono: profesional pero cercano.
@@ -599,7 +648,7 @@ REGLAS DE CALIDAD — OBLIGATORIO:
 - NO incluyas "Post #N" ni "---" ni nada que no sea el post.`,
     messages: [{
       role: 'user',
-      content: `Contexto del negocio y plan:\n${input.conversationContext}\n\nGenera el Post #${input.postNumber} de ${input.totalPosts}: "${input.postTitle}"\n\nEscribe SOLO el texto del post, listo para publicar.`,
+      content: `Contexto del negocio y plan:\n${fullContext}\n\nGenera el Post #${input.postNumber} de ${input.totalPosts}: "${input.postTitle}"\n\nEscribe SOLO el texto del post, listo para publicar.`,
     }],
   });
 
@@ -611,7 +660,7 @@ REGLAS DE CALIDAD — OBLIGATORIO:
   let imagePrompt: string | null = null;
   try {
     const imgResponse = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5-20250929',
+      model: MODEL,
       max_tokens: 200,
       system: `You generate image prompts for FLUX (Replicate) to create social media marketing images.
 Rules:

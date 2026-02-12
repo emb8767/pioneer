@@ -10,7 +10,7 @@
 //
 // Fase DB-1: sessionId del guardianState se pasa a executeTool para operaciones DB.
 
-import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicClient, MODEL } from '@/lib/anthropic';
 import { buildSystemPrompt } from '@/lib/system-prompt';
 import { PIONEER_TOOLS } from '@/lib/tool-definitions';
 import { executeTool } from '@/lib/tool-executor';
@@ -22,10 +22,8 @@ import {
 } from './draft-guardian';
 import type { GuardianState } from './draft-guardian';
 
-// Inicializar cliente de Anthropic (singleton a nivel módulo)
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// Shared Anthropic client
+const anthropic = getAnthropicClient();
 
 // Fase 3: Flujo típico: list_accounts → generate_content → describe_image = 3
 // Con queue setup: +1. Con guardian retry: +1-2. Margen: 7 total.
@@ -74,7 +72,7 @@ export async function runConversationLoop(
     console.log(`[Pioneer] === Iteración ${iteration + 1}/${MAX_TOOL_USE_ITERATIONS} ===`);
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5-20250929',
+      model: MODEL,
       max_tokens: 2048,
       system: systemPrompt,
       tools: PIONEER_TOOLS,
