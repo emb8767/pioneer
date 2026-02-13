@@ -673,7 +673,7 @@ async function extractAndSaveBusinessInfo(sessionId: string, conversationContext
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-5-20250929',
     max_tokens: 500,
-    system: `Extract business information from a conversation between a marketing agent and a client. Return ONLY valid JSON, no markdown, no explanation.
+    system: `Extract business information and selected marketing strategies from a conversation between a marketing agent and a client. Return ONLY valid JSON, no markdown, no explanation.
 
 The JSON must have this structure (omit fields not mentioned in the conversation):
 {
@@ -690,7 +690,8 @@ The JSON must have this structure (omit fields not mentioned in the conversation
   "current_promotion": "any active promotions",
   "services": "main services offered",
   "target_audience": "who their customers are",
-  "additional_info": "any other relevant details"
+  "additional_info": "any other relevant details",
+  "strategies_selected": ["short description of each strategy the client chose"]
 }`,
     messages: [{
       role: 'user',
@@ -706,11 +707,19 @@ The JSON must have this structure (omit fields not mentioned in the conversation
 
   const businessInfo = JSON.parse(jsonStr);
 
+  // Separar strategies del business_info
+  const strategies: string[] = businessInfo.strategies_selected || [];
+  delete businessInfo.strategies_selected;
+
   await updateSession(sessionId, {
     business_name: businessInfo.business_name || null,
     business_info: businessInfo,
+    strategies,
     status: 'active',
   });
 
   console.log(`[Pioneer DB] Business info guardado para session ${sessionId}: ${JSON.stringify(businessInfo).substring(0, 200)}...`);
+  if (strategies.length > 0) {
+    console.log(`[Pioneer DB] Estrategias guardadas: ${JSON.stringify(strategies)}`);
+  }
 }
