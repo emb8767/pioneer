@@ -673,9 +673,9 @@ async function extractAndSaveBusinessInfo(sessionId: string, conversationContext
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-5-20250929',
     max_tokens: 500,
-    system: `Extract business information and marketing strategies from a conversation between a marketing agent and a client. Return ONLY valid JSON, no markdown, no explanation.
+    system: `You extract structured data from conversations. You ONLY output valid JSON. No preamble, no "Entendido", no explanation, no markdown. Just the JSON object.
 
-The JSON must have this structure (omit business fields not mentioned, but ALWAYS include strategies_selected):
+Extract business information and marketing strategies from this conversation:
 {
   "business_name": "name of the business",
   "business_type": "type/industry",
@@ -694,7 +694,12 @@ The JSON must have this structure (omit business fields not mentioned, but ALWAY
   "strategies_selected": ["strategy 1 description", "strategy 2 description"]
 }
 
-IMPORTANT: strategies_selected must ALWAYS be included. Look for the marketing strategies the agent proposed (usually 3-4 numbered options) and which ones the client chose. If they said "todas" or "all", include all proposed strategies. Never leave strategies_selected empty if strategies were discussed.`,
+Rules:
+- Output ONLY the JSON object, nothing else
+- Omit business fields not mentioned in the conversation
+- ALWAYS include strategies_selected — find the marketing strategies proposed and which the client chose
+- If client said "todas" or "all", include all proposed strategies
+- Never leave strategies_selected empty if strategies were discussed`,
     messages: [{
       role: 'user',
       content: conversationContext,
@@ -704,10 +709,22 @@ IMPORTANT: strategies_selected must ALWAYS be included. Look for the marketing s
   const block = response.content[0];
   if (block.type !== 'text') return;
 
+  // Parseo robusto: limpiar markdown, y si falla, extraer JSON del texto
   let jsonStr = block.text.trim();
   jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
 
-  const businessInfo = JSON.parse(jsonStr);
+  let businessInfo;
+  try {
+    businessInfo = JSON.parse(jsonStr);
+  } catch {
+    // Fallback: Claude respondió con texto + JSON adentro — extraer el objeto
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn(`[Pioneer Action] No se encontró JSON en respuesta de Claude: ${jsonStr.substring(0, 100)}...`);
+      return;
+    }
+    businessInfo = JSON.parse(jsonMatch[0]);
+  }
 
   // Separar strategies del business_info
   const strategies: string[] = businessInfo.strategies_selected || [];
