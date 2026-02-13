@@ -700,17 +700,23 @@ Rules:
 - ALWAYS include strategies_selected — find the marketing strategies proposed and which the client chose
 - If client said "todas" or "all", include all proposed strategies
 - Never leave strategies_selected empty if strategies were discussed`,
-    messages: [{
-      role: 'user',
-      content: conversationContext,
-    }],
+    messages: [
+      {
+        role: 'user',
+        content: `Here is a transcript of a conversation between a marketing agent (Pioneer) and a client. Extract the business data as JSON.\n\n${conversationContext}`,
+      },
+      {
+        role: 'assistant',
+        content: '{',
+      },
+    ],
   });
 
   const block = response.content[0];
   if (block.type !== 'text') return;
 
-  // Parseo robusto: limpiar markdown, y si falla, extraer JSON del texto
-  let jsonStr = block.text.trim();
+  // Prefill started with '{', so prepend it back
+  let jsonStr = '{' + block.text.trim();
   jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
 
   let businessInfo;
