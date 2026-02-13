@@ -673,9 +673,9 @@ async function extractAndSaveBusinessInfo(sessionId: string, conversationContext
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-5-20250929',
     max_tokens: 500,
-    system: `Extract business information and selected marketing strategies from a conversation between a marketing agent and a client. Return ONLY valid JSON, no markdown, no explanation.
+    system: `Extract business information and marketing strategies from a conversation between a marketing agent and a client. Return ONLY valid JSON, no markdown, no explanation.
 
-The JSON must have this structure (omit fields not mentioned in the conversation):
+The JSON must have this structure (omit business fields not mentioned, but ALWAYS include strategies_selected):
 {
   "business_name": "name of the business",
   "business_type": "type/industry",
@@ -691,8 +691,10 @@ The JSON must have this structure (omit fields not mentioned in the conversation
   "services": "main services offered",
   "target_audience": "who their customers are",
   "additional_info": "any other relevant details",
-  "strategies_selected": ["short description of each strategy the client chose"]
-}`,
+  "strategies_selected": ["strategy 1 description", "strategy 2 description"]
+}
+
+IMPORTANT: strategies_selected must ALWAYS be included. Look for the marketing strategies the agent proposed (usually 3-4 numbered options) and which ones the client chose. If they said "todas" or "all", include all proposed strategies. Never leave strategies_selected empty if strategies were discussed.`,
     messages: [{
       role: 'user',
       content: conversationContext,
