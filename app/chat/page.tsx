@@ -321,22 +321,21 @@ export default function ChatPage() {
         .then(res => res.json())
         .then(data => {
           if (data.exists) {
-            console.log(`[Pioneer] Sesión restaurada: ${data.sessionId} (${data.businessName})`);
-            // Send welcome-back as first message to trigger streaming
-            let welcomeBack = `Soy un cliente que regresa. Mi negocio es ${data.businessName}.`;
-            if (data.plan) {
-              welcomeBack += ` Mi plan "${data.plan.name}" tiene ${data.plan.postsPublished}/${data.plan.postCount} posts publicados.`;
+            // Session exists — keep it regardless of interview status
+            if (data.hasBusinessInfo) {
+              console.log(`[Pioneer] Sesión restaurada con negocio: ${data.businessName}`);
+            } else {
+              console.log(`[Pioneer] Sesión restaurada (entrevista en progreso): ${data.sessionId}`);
             }
-            welcomeBack += ' ¿Qué puedo hacer hoy?';
-            // We'll let the user interact naturally instead of auto-sending
           } else {
+            // Session not in DB — clean up
             localStorage.removeItem('pioneer_session_id');
             setSessionId(null);
             sessionIdRef.current = null;
           }
         })
         .catch(() => {
-          // Network error — continue without session
+          // Network error — keep sessionId, don't invalidate
         });
     }
   }, [sessionChecked]);
