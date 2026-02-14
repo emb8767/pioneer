@@ -1,43 +1,41 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+// page.tsx — AI SDK 6: useChat hook + Pioneer custom components
+//
+// WHAT CHANGED:
+//   OLD: useState + manual fetch to /api/chat → JSON response → setMessages
+//   NEW: useChat hook → SSE streaming → automatic message state
+//
+// WHAT STAYS THE SAME:
+//   - MessageContent (markdown parsing, images, links, bold)
+//   - ImageWithRetry (CDN delay handling)
+//   - ActionButtons (visual component)
+//   - /api/chat/action calls for deterministic execution
+//   - localStorage sessionId persistence
+//   - ?pending_connection OAuth callback handling
+//
+// KEY CONCEPTS:
+//   - useChat manages messages, streaming status, and sendMessage
+//   - Buttons arrive as data-pioneer-buttons parts in message.parts[]
+//   - SessionId arrives as data-pioneer-session parts (transient via onData)
+//   - Text arrives as regular text parts (streaming token by token)
+//   - Action buttons still call /api/chat/action separately (not through useChat)
 
-// === TIPOS ===
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport } from 'ai';
+import type { PioneerUIMessage, ButtonConfig, ActionContext } from '@/lib/ai-types';
 
-interface ButtonConfig {
-  id: string;
-  label: string;
-  type: 'option' | 'action';
-  style: 'primary' | 'secondary' | 'ghost';
-  chatMessage?: string;
-  action?: string;
-  params?: Record<string, unknown>;
-}
-
-interface ActionContext {
-  // DB IDs — esto es TODO lo que se necesita
-  sessionId?: string;
-  planId?: string;
-  postId?: string;
-  // imageUrls solo vive en generate_image → approve_and_publish (mismo flujo)
-  imageUrls?: string[];
-}
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  buttons?: ButtonConfig[];
-  buttonsDisabled?: boolean;
-  actionContext?: ActionContext;
-}
-
-// === RENDERIZAR CONTENIDO DEL MENSAJE ===
+// ════════════════════════════════════════
+// RENDERIZAR CONTENIDO DEL MENSAJE
+// ════════════════════════════════════════
 // Parsea:
 // 1. Markdown images: ![alt](url) → <img>
 // 2. Bare replicate/late.dev/image URLs → <img>
 // 3. Markdown links: [text](url) → <a>
 // 4. Bare URLs (https://...) → <a> clickable
 // 5. Bold: **text** → <strong>
+
 function MessageContent({ content }: { content: string }) {
   const parts: React.ReactNode[] = [];
   const lines = content.split('\n');
@@ -49,7 +47,6 @@ function MessageContent({ content }: { content: string }) {
       parts.push(<br key={`br-${lineIdx}`} />);
     }
 
-    // Combined regex — ORDER MATTERS (most specific first)
     const combinedRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)|(https:\/\/replicate\.delivery\/[^\s)]+|https:\/\/media\.getlate\.dev\/[^\s)]+|https?:\/\/[^\s)]+\.(?:webp|png|jpg|jpeg|gif))|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)]+)|\*\*([^*]+)\*\*/g;
 
     let lastIndex = 0;
@@ -65,20 +62,17 @@ function MessageContent({ content }: { content: string }) {
       }
 
       if (match[1] !== undefined && match[2]) {
-        // Markdown image: ![alt](url)
         const url = match[2];
         const alt = match[1] || 'Imagen generada';
         parts.push(
           <ImageWithRetry key={`img-${lineIdx}-${match.index}`} url={url} alt={alt} />
         );
       } else if (match[3]) {
-        // Bare image URL
         const url = match[3];
         parts.push(
           <ImageWithRetry key={`bareimg-${lineIdx}-${match.index}`} url={url} alt="Imagen generada" />
         );
       } else if (match[4] && match[5]) {
-        // Markdown link: [text](url)
         parts.push(
           <a
             key={`mdlink-${lineIdx}-${match.index}`}
@@ -91,7 +85,6 @@ function MessageContent({ content }: { content: string }) {
           </a>
         );
       } else if (match[6]) {
-        // Bare URL
         const url = match[6];
         parts.push(
           <a
@@ -105,7 +98,6 @@ function MessageContent({ content }: { content: string }) {
           </a>
         );
       } else if (match[7]) {
-        // Bold text: **text**
         parts.push(
           <strong key={`bold-${lineIdx}-${match.index}`}>{match[7]}</strong>
         );
@@ -126,9 +118,9 @@ function MessageContent({ content }: { content: string }) {
   return <div className="whitespace-pre-wrap">{parts}</div>;
 }
 
-// === FIX #1: IMAGEN CON RETRY AUTOMÁTICO ===
-// Si la imagen no carga (CDN delay, URL temporal), reintenta hasta 2 veces.
-// Solo después del último retry muestra el mensaje de error.
+// ════════════════════════════════════════
+// IMAGEN CON RETRY AUTOMÁTICO
+// ════════════════════════════════════════
 
 function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
   const [status, setStatus] = useState<'loading' | 'loaded' | 'retrying' | 'error'>('loading');
@@ -157,7 +149,6 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
               if (retryCount.current < maxRetries) {
                 retryCount.current += 1;
                 setStatus('retrying');
-                // Delays escalados: 3s, 5s, 8s
                 const delays = [3000, 5000, 8000];
                 const delay = delays[retryCount.current - 1] || 5000;
                 setTimeout(() => {
@@ -181,7 +172,9 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
   );
 }
 
-// === COMPONENTE DE BOTONES ===
+// ════════════════════════════════════════
+// COMPONENTE DE BOTONES
+// ════════════════════════════════════════
 
 function ActionButtons({
   buttons,
@@ -199,7 +192,7 @@ function ActionButtons({
       {loading ? (
         <div className="flex items-center gap-2 px-4 py-2 text-sm text-blue-600">
           <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          Programando publicación...
+          Procesando...
         </div>
       ) : (
         buttons.map((button) => {
@@ -232,78 +225,101 @@ function ActionButtons({
   );
 }
 
-// === COMPONENTE PRINCIPAL ===
+// ════════════════════════════════════════
+// COMPONENTE PRINCIPAL
+// ════════════════════════════════════════
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<number | null>(null); // index del msg con acción en curso
+  // --- Pioneer state (not managed by useChat) ---
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null); // message ID with action in progress
+  const [disabledMessages, setDisabledMessages] = useState<Set<string>>(new Set());
   const [pendingConnectionHandled, setPendingConnectionHandled] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null); // DB session ID
-  const [sessionChecked, setSessionChecked] = useState(false); // si ya se verificó sesión guardada
+  const [actionResults, setActionResults] = useState<Map<string, {
+    content: string;
+    buttons?: ButtonConfig[];
+    actionContext?: ActionContext;
+  }>>(new Map());
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll al último mensaje
+  const [chatInput, setChatInput] = useState('');
+
+  // --- Transport recreated when sessionId changes ---
+  const transport = useMemo(
+    () => new DefaultChatTransport({
+      api: '/api/chat',
+      body: { sessionId },
+    }),
+    [sessionId]
+  );
+
+  // --- useChat hook (manages conversation state + streaming) ---
+  const {
+    messages,
+    status,
+    sendMessage,
+    error,
+  } = useChat<PioneerUIMessage>({
+    transport,
+    // Handle transient data parts (sessionId from backend)
+    onData: (dataPart) => {
+      if (dataPart.type === 'data-pioneer-session') {
+        const newSessionId = (dataPart.data as { sessionId: string }).sessionId;
+        if (newSessionId && !sessionId) {
+          setSessionId(newSessionId);
+          localStorage.setItem('pioneer_session_id', newSessionId);
+          console.log(`[Pioneer] SessionId recibido y guardado: ${newSessionId}`);
+        }
+      }
+    },
+    onError: (err) => {
+      console.error('[Pioneer] Chat error:', err);
+    },
+  });
+
+  const isLoading = status === 'submitted' || status === 'streaming';
+
+  // --- Auto-scroll ---
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, actionResults]);
 
-  // Verificar sesión guardada en localStorage al cargar
+  // --- Check saved session on mount ---
   useEffect(() => {
     if (sessionChecked) return;
     setSessionChecked(true);
 
     const savedSessionId = localStorage.getItem('pioneer_session_id');
-    if (!savedSessionId) {
-      // No hay sesión guardada — mostrar bienvenida normal
-      setMessages([{
-        role: 'assistant',
-        content: '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
-      }]);
-      return;
-    }
-
-    // Verificar si la sesión existe y tiene datos
-    fetch(`/api/chat/session?id=${savedSessionId}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.exists) {
-          setSessionId(data.sessionId);
-          console.log(`[Pioneer] Sesión restaurada: ${data.sessionId} (${data.businessName})`);
-
-          // Bienvenida personalizada
-          let welcomeBack = `¡Bienvenido de vuelta! Tengo guardada la información de **${data.businessName}**.`;
-          if (data.plan) {
-            welcomeBack += `\n\nSu plan "${data.plan.name}" tiene ${data.plan.postsPublished}/${data.plan.postCount} posts publicados.`;
+    if (savedSessionId) {
+      setSessionId(savedSessionId);
+      // Verify session exists in DB
+      fetch(`/api/chat/session?id=${savedSessionId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.exists) {
+            console.log(`[Pioneer] Sesión restaurada: ${data.sessionId} (${data.businessName})`);
+            // Send welcome-back as first message to trigger streaming
+            let welcomeBack = `Soy un cliente que regresa. Mi negocio es ${data.businessName}.`;
+            if (data.plan) {
+              welcomeBack += ` Mi plan "${data.plan.name}" tiene ${data.plan.postsPublished}/${data.plan.postCount} posts publicados.`;
+            }
+            welcomeBack += ' ¿Qué puedo hacer hoy?';
+            // We'll let the user interact naturally instead of auto-sending
+          } else {
+            localStorage.removeItem('pioneer_session_id');
+            setSessionId(null);
           }
-          welcomeBack += '\n\n¿Qué le gustaría hacer hoy?';
-
-          setMessages([{
-            role: 'assistant',
-            content: welcomeBack,
-            actionContext: { sessionId: data.sessionId, planId: data.plan?.id },
-          }]);
-        } else {
-          // Sesión expirada o inválida — limpiar y mostrar bienvenida normal
-          localStorage.removeItem('pioneer_session_id');
-          setMessages([{
-            role: 'assistant',
-            content: '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
-          }]);
-        }
-      })
-      .catch(() => {
-        // Error de red — mostrar bienvenida normal
-        setMessages([{
-          role: 'assistant',
-          content: '¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?',
-          }]);
-      });
+        })
+        .catch(() => {
+          // Network error — continue without session
+        });
+    }
   }, [sessionChecked]);
 
-  // === DETECTAR ?pending_connection EN LA URL ===
+  // --- Detect ?pending_connection in URL ---
   useEffect(() => {
     if (pendingConnectionHandled) return;
 
@@ -312,145 +328,93 @@ export default function ChatPage() {
 
     if (pendingPlatform) {
       setPendingConnectionHandled(true);
-
-      const newUrl = window.location.pathname;
-      window.history.replaceState({}, '', newUrl);
+      window.history.replaceState({}, '', window.location.pathname);
 
       const platformName = getPlatformDisplayName(pendingPlatform);
       const autoMessage = `Acabo de autorizar ${platformName}.\nNecesito completar la conexión.`;
 
       setTimeout(() => {
-        sendAutoMessage(autoMessage);
+        sendMessage({ text: autoMessage });
       }, 500);
     }
-  }, [pendingConnectionHandled]);
+  }, [pendingConnectionHandled, sendMessage]);
 
-  // === ENVIAR MENSAJE (compartido por sendMessage, sendAutoMessage, y botones) ===
-  const sendChatMessage = async (messageText: string, currentMessages: Message[]) => {
-    const userMessage: Message = { role: 'user', content: messageText };
-    const newMessages = [...currentMessages, userMessage];
-    setMessages(newMessages);
-    setIsLoading(true);
+  // ════════════════════════════════════════
+  // EXTRACT BUTTONS FROM MESSAGE PARTS
+  // ════════════════════════════════════════
+  const getButtonsFromMessage = useCallback((message: PioneerUIMessage): {
+    buttons: ButtonConfig[];
+    actionContext?: ActionContext;
+  } | null => {
+    if (message.role !== 'assistant') return null;
 
-    try {
-      // Excluir welcome message del historial enviado al API
-      const messagesToSend = newMessages.slice(1).map(m => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: messagesToSend,
-          sessionId, // Enviar sessionId al backend
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Error en la respuesta del servidor');
-      }
-
-      const data = await response.json();
-
-      // Capturar sessionId de la respuesta (si el backend lo creó)
-      if (data.sessionId && !sessionId) {
-        setSessionId(data.sessionId);
-        localStorage.setItem('pioneer_session_id', data.sessionId);
-        console.log(`[Pioneer] SessionId recibido y guardado: ${data.sessionId}`);
-      }
-
-      // Construir actionContext de la respuesta
-      let responseActionContext = data.actionContext;
-
-      // Inyectar DB IDs heredados si faltan en la respuesta
-      if (responseActionContext) {
-        // sessionId siempre se hereda
-        if (!responseActionContext.sessionId && (sessionId || data.sessionId)) {
-          responseActionContext.sessionId = sessionId || data.sessionId;
-        }
-        // planId: buscar en mensajes anteriores si no viene
-        if (!responseActionContext.planId) {
-          for (let i = newMessages.length - 1; i >= 0; i--) {
-            if (newMessages[i].actionContext?.planId) {
-              responseActionContext.planId = newMessages[i].actionContext!.planId;
-              break;
-            }
-          }
+    // Check for data-pioneer-buttons parts
+    for (const part of message.parts) {
+      if (part.type === 'data-pioneer-buttons') {
+        const data = part.data as { buttons: ButtonConfig[]; actionContext?: ActionContext };
+        if (data.buttons && data.buttons.length > 0) {
+          return data;
         }
       }
-
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: data.message,
-        ...(data.buttons && { buttons: data.buttons }),
-        ...(responseActionContext && { actionContext: responseActionContext }),
-      };
-
-      setMessages([...newMessages, assistantMessage]);
-    } catch (error) {
-      console.error('Error:', error);
-      setMessages([
-        ...newMessages,
-        {
-          role: 'assistant',
-          content:
-            'Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.',
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
     }
-  };
+    return null;
+  }, []);
 
-  const sendAutoMessage = async (messageText: string) => {
-    if (isLoading) return;
-    await sendChatMessage(messageText, messages);
-  };
+  // ════════════════════════════════════════
+  // EXTRACT TEXT FROM MESSAGE PARTS
+  // ════════════════════════════════════════
+  const getTextFromMessage = useCallback((message: PioneerUIMessage): string => {
+    return message.parts
+      .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+      .map(part => part.text)
+      .join('\n\n');
+  }, []);
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
-    const text = input.trim();
-    setInput('');
-    await sendChatMessage(text, messages);
-  };
+  // ════════════════════════════════════════
+  // HANDLE SEND MESSAGE
+  // ════════════════════════════════════════
+  const handleSend = useCallback(() => {
+    if (!chatInput.trim() || isLoading) return;
+    const text = chatInput.trim();
+    setChatInput('');
+    sendMessage({ text });
+  }, [chatInput, isLoading, setChatInput, sendMessage]);
 
-  // === EJECUTAR ACCIÓN (DB-first — solo DB IDs) ===
-  const executeAction = async (
+  // ════════════════════════════════════════
+  // EXECUTE ACTION (deterministic pipeline)
+  // ════════════════════════════════════════
+  const executeAction = useCallback(async (
     button: ButtonConfig,
-    messageIndex: number,
+    messageId: string,
     actionContext?: ActionContext
   ) => {
-    setActionLoading(messageIndex);
+    setActionLoading(messageId);
 
-    // Merge ultra-simple: solo hereda sessionId y planId de mensajes anteriores
-    // postId viene del mensaje actual (cada post tiene su propio ID)
-    // content, imageSpec, platforms — todo se lee de DB en el backend
+    // Merge actionContext: inherit sessionId from state
     const mergedContext: ActionContext = { ...actionContext };
-
-    if (!mergedContext.sessionId || !mergedContext.planId) {
-      for (let i = messageIndex - 1; i >= 0; i--) {
-        const prevCtx = messages[i]?.actionContext;
-        if (!prevCtx) continue;
-
-        if (!mergedContext.sessionId && prevCtx.sessionId) {
-          mergedContext.sessionId = prevCtx.sessionId;
-        }
-        if (!mergedContext.planId && prevCtx.planId) {
-          mergedContext.planId = prevCtx.planId;
-        }
-
-        if (mergedContext.sessionId && mergedContext.planId) break;
-      }
-    }
-
-    // Inyectar sessionId del state si falta
     if (!mergedContext.sessionId && sessionId) {
       mergedContext.sessionId = sessionId;
     }
 
-    // Enviar solo DB IDs al backend
+    // Find planId from previous messages if missing
+    if (!mergedContext.planId) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role !== 'assistant') continue;
+        for (const part of msg.parts) {
+          if (part.type === 'data-pioneer-buttons') {
+            const data = part.data as { actionContext?: ActionContext };
+            if (data.actionContext?.planId) {
+              mergedContext.planId = data.actionContext.planId;
+              break;
+            }
+          }
+        }
+        if (mergedContext.planId) break;
+      }
+    }
+
+    // Build params
     const params: Record<string, unknown> = {
       sessionId: mergedContext.sessionId,
       planId: mergedContext.planId,
@@ -458,31 +422,35 @@ export default function ChatPage() {
       imageUrls: mergedContext.imageUrls,
     };
 
-    // Para approve_plan: enviar el texto del plan (mensaje anterior de Claude)
+    // For approve_plan: send plan text + conversation context
     if (button.action === 'approve_plan') {
-      // Buscar el mensaje de Claude que contiene el plan
-      for (let i = messageIndex; i >= 0; i--) {
-        if (messages[i]?.role === 'assistant' && /posts/i.test(messages[i]?.content || '')) {
-          params.planText = messages[i].content;
+      // Find the assistant message with the plan
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const text = getTextFromMessage(messages[i] as PioneerUIMessage);
+        if (messages[i].role === 'assistant' && /posts/i.test(text)) {
+          params.planText = text;
           break;
         }
       }
-      // También enviar conversationContext para extraer business_info
+      // Conversation context for business_info extraction
       const contextMessages = messages
-        .filter(m => m.role === 'assistant' || m.role === 'user')
         .slice(0, 20)
-        .map(m => `${m.role === 'user' ? 'Cliente' : 'Pioneer'}: ${m.content.substring(0, 500)}`)
+        .map(m => {
+          const text = getTextFromMessage(m as PioneerUIMessage);
+          return `${m.role === 'user' ? 'Cliente' : 'Pioneer'}: ${text.substring(0, 500)}`;
+        })
         .join('\n\n');
       params.conversationContext = contextMessages;
     }
 
-    // Para next_post: enviar contexto de conversación (para que Claude genere buen contenido)
+    // For next_post: send conversation context
     if (button.action === 'next_post') {
-      // Recopilar contexto: últimos mensajes relevantes de la conversación
       const contextMessages = messages
-        .filter(m => m.role === 'assistant' || m.role === 'user')
-        .slice(0, 20) // Primeros 20 mensajes (incluye entrevista + plan)
-        .map(m => `${m.role === 'user' ? 'Cliente' : 'Pioneer'}: ${m.content.substring(0, 500)}`)
+        .slice(0, 20)
+        .map(m => {
+          const text = getTextFromMessage(m as PioneerUIMessage);
+          return `${m.role === 'user' ? 'Cliente' : 'Pioneer'}: ${text.substring(0, 500)}`;
+        })
         .join('\n\n');
       params.conversationContext = contextMessages;
     }
@@ -499,64 +467,55 @@ export default function ChatPage() {
 
       const data = await response.json();
 
-      // Guardar actionContext del server (tiene los DB IDs actualizados)
-      const resultMessage: Message = {
-        role: 'assistant',
+      // Store action result keyed by a unique ID
+      const resultId = `action-${messageId}-${Date.now()}`;
+      setActionResults(prev => new Map(prev).set(resultId, {
         content: data.message,
-        ...(data.buttons && { buttons: data.buttons }),
-        ...(data.actionContext && { actionContext: { ...mergedContext, ...data.actionContext } }),
-      };
+        buttons: data.buttons,
+        actionContext: { ...mergedContext, ...data.actionContext },
+      }));
 
-      setMessages(prev => [...prev, resultMessage]);
     } catch (error) {
       console.error('Error ejecutando acción:', error);
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: '❌ Error ejecutando la acción. Por favor intente de nuevo.',
-        },
-      ]);
+      const resultId = `action-${messageId}-${Date.now()}`;
+      setActionResults(prev => new Map(prev).set(resultId, {
+        content: '❌ Error ejecutando la acción. Por favor intente de nuevo.',
+      }));
     } finally {
       setActionLoading(null);
     }
-  };
+  }, [sessionId, messages, getTextFromMessage]);
 
-  // === MANEJAR CLICK EN BOTÓN ===
-  const handleButtonClick = (button: ButtonConfig, messageIndex: number) => {
-    // 1. Deshabilitar TODOS los botones de este mensaje
-    setMessages(prev => prev.map((msg, idx) =>
-      idx === messageIndex ? { ...msg, buttonsDisabled: true } : msg
-    ));
+  // ════════════════════════════════════════
+  // HANDLE BUTTON CLICK
+  // ════════════════════════════════════════
+  const handleButtonClick = useCallback((button: ButtonConfig, messageId: string, actionContext?: ActionContext) => {
+    // Disable buttons on this message
+    setDisabledMessages(prev => new Set(prev).add(messageId));
 
     if (button.type === 'option') {
       if (button.chatMessage === '') {
-        // Botón "Otro" / "Cambios" → focus en el input de texto
+        // "Otro" / "Cambios" → focus input
         inputRef.current?.focus();
         return;
       }
-      // Enviar como mensaje de chat normal
-      setMessages(prev => {
-        const updatedMessages = prev.map((msg, idx) =>
-          idx === messageIndex ? { ...msg, buttonsDisabled: true } : msg
-        );
-        sendChatMessage(button.chatMessage!, updatedMessages);
-        return updatedMessages;
-      });
+      // Send as chat message through useChat
+      sendMessage({ text: button.chatMessage! });
     } else if (button.type === 'action') {
-      // Buscar el actionContext del mensaje que tiene los botones
-      const msg = messages[messageIndex];
-      executeAction(button, messageIndex, msg?.actionContext);
+      executeAction(button, messageId, actionContext);
     }
-  };
+  }, [sendMessage, executeAction]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      handleSend();
     }
   };
 
+  // ════════════════════════════════════════
+  // RENDER
+  // ════════════════════════════════════════
   return (
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
@@ -568,37 +527,94 @@ export default function ChatPage() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
-          {messages.map((message, index) => (
-            <div key={index}>
-              <div
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                    message.role === 'user'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white border border-gray-200 text-gray-800'
-                  }`}
-                >
-                  <MessageContent content={message.content} />
+          {/* Welcome message (before any useChat messages) */}
+          {messages.length === 0 && !isLoading && (
+            <div className="flex justify-start">
+              <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white border border-gray-200 text-gray-800">
+                <MessageContent content="¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?" />
+              </div>
+            </div>
+          )}
+
+          {/* Chat messages from useChat */}
+          {messages.map((message) => {
+            const pioneerMsg = message as PioneerUIMessage;
+            const text = getTextFromMessage(pioneerMsg);
+            const buttonData = getButtonsFromMessage(pioneerMsg);
+            const isDisabled = disabledMessages.has(message.id);
+
+            return (
+              <div key={message.id}>
+                {/* Message bubble */}
+                {text && (
+                  <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                        message.role === 'user'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white border border-gray-200 text-gray-800'
+                      }`}
+                    >
+                      <MessageContent content={text} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Buttons from data parts */}
+                {message.role === 'assistant' && buttonData && buttonData.buttons.length > 0 && (
+                  <div className="flex justify-start mt-1">
+                    <div className="max-w-[80%]">
+                      <ActionButtons
+                        buttons={buttonData.buttons}
+                        disabled={isDisabled || isLoading}
+                        loading={actionLoading === message.id}
+                        onButtonClick={(button) =>
+                          handleButtonClick(button, message.id, buttonData.actionContext)
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Action results (from /api/chat/action) */}
+          {Array.from(actionResults.entries()).map(([resultId, result]) => (
+            <div key={resultId}>
+              <div className="flex justify-start">
+                <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white border border-gray-200 text-gray-800">
+                  <MessageContent content={result.content} />
                 </div>
               </div>
-              {/* Botones debajo del mensaje del assistant */}
-              {message.role === 'assistant' && message.buttons && message.buttons.length > 0 && (
+              {result.buttons && result.buttons.length > 0 && (
                 <div className="flex justify-start mt-1">
                   <div className="max-w-[80%]">
                     <ActionButtons
-                      buttons={message.buttons}
-                      disabled={!!message.buttonsDisabled || isLoading}
-                      loading={actionLoading === index}
-                      onButtonClick={(button) => handleButtonClick(button, index)}
+                      buttons={result.buttons}
+                      disabled={disabledMessages.has(resultId) || isLoading}
+                      loading={actionLoading === resultId}
+                      onButtonClick={(button) => {
+                        setDisabledMessages(prev => new Set(prev).add(resultId));
+                        if (button.type === 'option') {
+                          if (button.chatMessage === '') {
+                            inputRef.current?.focus();
+                            return;
+                          }
+                          sendMessage({ text: button.chatMessage! });
+                        } else if (button.type === 'action') {
+                          executeAction(button, resultId, result.actionContext);
+                        }
+                      }}
                     />
                   </div>
                 </div>
               )}
             </div>
           ))}
-          {isLoading && (
+
+          {/* Loading indicator */}
+          {status === 'submitted' && (
             <div className="flex justify-start">
               <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3">
                 <div className="flex space-x-2">
@@ -609,6 +625,16 @@ export default function ChatPage() {
               </div>
             </div>
           )}
+
+          {/* Error display */}
+          {error && (
+            <div className="flex justify-start">
+              <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-red-50 border border-red-200 text-red-700">
+                Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.
+              </div>
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -618,8 +644,8 @@ export default function ChatPage() {
         <div className="max-w-3xl mx-auto flex gap-3">
           <textarea
             ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
             onKeyDown={handleKeyPress}
             placeholder="Escriba su mensaje..."
             className="flex-1 resize-none rounded-xl border border-gray-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -627,8 +653,8 @@ export default function ChatPage() {
             disabled={isLoading}
           />
           <button
-            onClick={sendMessage}
-            disabled={isLoading || !input.trim()}
+            onClick={handleSend}
+            disabled={isLoading || !chatInput.trim()}
             className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
           >
             Enviar
@@ -639,7 +665,9 @@ export default function ChatPage() {
   );
 }
 
-// === HELPERS ===
+// ════════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════════
 
 function getPlatformDisplayName(platform: string): string {
   const names: Record<string, string> = {

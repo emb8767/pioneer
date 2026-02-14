@@ -9,12 +9,16 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.44",
+    "@ai-sdk/react": "^3.0.88",
     "@anthropic-ai/sdk": "^0.72.1",
     "@supabase/supabase-js": "^2.95.3",
+    "ai": "^6.0.86",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "replicate": "^1.4.0"
+    "replicate": "^1.4.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
