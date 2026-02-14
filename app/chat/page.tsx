@@ -240,6 +240,11 @@ export default function ChatPage() {
     buttons?: ButtonConfig[];
     actionContext?: ActionContext;
   }>>(new Map());
+  // Welcome screen data — null = new user, object = returning user
+  const [welcomeData, setWelcomeData] = useState<{
+    businessName: string | null;
+    plan: { name: string; postCount: number; postsPublished: number } | null;
+  } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -324,6 +329,10 @@ export default function ChatPage() {
             // Session exists — keep it regardless of interview status
             if (data.hasBusinessInfo) {
               console.log(`[Pioneer] Sesión restaurada con negocio: ${data.businessName}`);
+              setWelcomeData({
+                businessName: data.businessName,
+                plan: data.plan || null,
+              });
             } else {
               console.log(`[Pioneer] Sesión restaurada (entrevista en progreso): ${data.sessionId}`);
             }
@@ -535,6 +544,15 @@ export default function ChatPage() {
   };
 
   // ════════════════════════════════════════
+  // WELCOME SCREEN SUGGESTIONS
+  // ════════════════════════════════════════
+  const showWelcomeScreen = messages.length === 0 && !isLoading;
+
+  const handleSuggestionClick = useCallback((text: string) => {
+    sendMessage({ text });
+  }, [sendMessage]);
+
+  // ════════════════════════════════════════
   // RENDER
   // ════════════════════════════════════════
   return (
@@ -545,19 +563,72 @@ export default function ChatPage() {
         <p className="text-sm text-gray-500">Su asistente de marketing digital</p>
       </header>
 
-      {/* Messages */}
+      {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
-          {/* Welcome message — visible until first assistant response with text arrives */}
-          {!messages.some(m => m.role === 'assistant' && m.parts.some(p => p.type === 'text' && (p as { type: 'text'; text: string }).text.trim().length > 0)) && (
-            <div className="flex justify-start">
-              <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white border border-gray-200 text-gray-800">
-                <MessageContent content="¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?" />
-              </div>
+
+          {/* ══════ WELCOME SCREEN ══════ */}
+          {showWelcomeScreen && (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+              {welcomeData?.businessName ? (
+                <>
+                  <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                    ¡Bienvenido de vuelta!
+                  </h2>
+                  <p className="text-gray-500 mb-8 text-lg">
+                    {welcomeData.businessName} — ¿qué hacemos hoy?
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
+                    <WelcomeSuggestion
+                      text="Crear un nuevo plan de marketing"
+                      onClick={handleSuggestionClick}
+                    />
+                    <WelcomeSuggestion
+                      text="Conectar más redes sociales"
+                      onClick={handleSuggestionClick}
+                    />
+                    <WelcomeSuggestion
+                      text="Revisar mis estrategias anteriores"
+                      onClick={handleSuggestionClick}
+                    />
+                    <WelcomeSuggestion
+                      text="Tengo una pregunta sobre marketing"
+                      onClick={handleSuggestionClick}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                    ¡Bienvenido a Pioneer!
+                  </h2>
+                  <p className="text-gray-500 mb-8 text-lg">
+                    Su asistente de marketing digital para hacer crecer su negocio en Puerto Rico.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
+                    <WelcomeSuggestion
+                      text="Quiero crear mi primera campaña de marketing"
+                      onClick={handleSuggestionClick}
+                    />
+                    <WelcomeSuggestion
+                      text="Necesito conectar mis redes sociales"
+                      onClick={handleSuggestionClick}
+                    />
+                    <WelcomeSuggestion
+                      text="¿Qué puede hacer Pioneer por mi negocio?"
+                      onClick={handleSuggestionClick}
+                    />
+                    <WelcomeSuggestion
+                      text="Quiero saber más antes de empezar"
+                      onClick={handleSuggestionClick}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           )}
 
-          {/* Chat messages from useChat */}
+          {/* ══════ CHAT MESSAGES ══════ */}
           {messages.map((message) => {
             const pioneerMsg = message as PioneerUIMessage;
             const text = getTextFromMessage(pioneerMsg);
@@ -683,6 +754,27 @@ export default function ChatPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ════════════════════════════════════════
+// WELCOME SUGGESTION BUTTON
+// ════════════════════════════════════════
+
+function WelcomeSuggestion({
+  text,
+  onClick,
+}: {
+  text: string;
+  onClick: (text: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onClick(text)}
+      className="px-4 py-3 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm text-left hover:bg-gray-50 hover:border-gray-300 transition-all duration-200 cursor-pointer"
+    >
+      {text}
+    </button>
   );
 }
 
