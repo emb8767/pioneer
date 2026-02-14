@@ -548,8 +548,8 @@ export default function ChatPage() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
-          {/* Welcome message (before any useChat messages) */}
-          {messages.length === 0 && !isLoading && (
+          {/* Welcome message — visible until first assistant response arrives */}
+          {!messages.some(m => m.role === 'assistant') && (
             <div className="flex justify-start">
               <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white border border-gray-200 text-gray-800">
                 <MessageContent content="¡Bienvenido! Soy Pioneer, su asistente de marketing. ¿En qué puedo ayudarle hoy con su negocio?" />
