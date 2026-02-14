@@ -6,20 +6,19 @@
 //   OLD: useState + manual fetch to /api/chat → JSON response → setMessages
 //   NEW: useChat hook → SSE streaming → automatic message state
 //
+// SESSION ID FIX (Fase 6.5):
+//   OLD: transient data part via onData → BROKEN (onData never fired)
+//   NEW: X-Pioneer-Session-Id response header → read via custom fetch wrapper
+//   The custom fetch wraps the native fetch, reads the header from the
+//   response, and saves sessionId to localStorage + React state.
+//   This is 100% reliable because headers are always available.
+//
 // WHAT STAYS THE SAME:
 //   - MessageContent (markdown parsing, images, links, bold)
 //   - ImageWithRetry (CDN delay handling)
 //   - ActionButtons (visual component)
 //   - /api/chat/action calls for deterministic execution
-//   - localStorage sessionId persistence
 //   - ?pending_connection OAuth callback handling
-//
-// KEY CONCEPTS:
-//   - useChat manages messages, streaming status, and sendMessage
-//   - Buttons arrive as data-pioneer-buttons parts in message.parts[]
-//   - SessionId arrives as data-pioneer-session parts (transient via onData)
-//   - Text arrives as regular text parts (streaming token by token)
-//   - Action buttons still call /api/chat/action separately (not through useChat)
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
@@ -247,13 +246,45 @@ export default function ChatPage() {
 
   const [chatInput, setChatInput] = useState('');
 
-  // --- Transport recreated when sessionId changes ---
+  // --- Ref to hold latest sessionId for the fetch wrapper ---
+  // Using a ref so the custom fetch always has the current value
+  // without needing to recreate the transport on every sessionId change.
+  const sessionIdRef = useRef<string | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  // --- Custom fetch that reads X-Pioneer-Session-Id header ---
+  // This is the FIX for the broken transient data part approach.
+  // The backend sends sessionId as a response header, which is
+  // always readable regardless of streaming protocol quirks.
+  const pioneerFetch = useCallback(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const response = await fetch(input, init);
+
+    // Read sessionId from response header
+    const headerSessionId = response.headers.get('X-Pioneer-Session-Id');
+    if (headerSessionId && !sessionIdRef.current) {
+      // First time receiving sessionId — save it
+      sessionIdRef.current = headerSessionId;
+      setSessionId(headerSessionId);
+      localStorage.setItem('pioneer_session_id', headerSessionId);
+      console.log(`[Pioneer] SessionId recibido via header: ${headerSessionId}`);
+    }
+
+    return response;
+  }, []);
+
+  // --- Transport with custom fetch (stable — no sessionId dependency) ---
+  // body uses a function so it always reads the latest sessionIdRef.current
   const transport = useMemo(
     () => new DefaultChatTransport({
       api: '/api/chat',
-      body: { sessionId },
+      body: () => ({ sessionId: sessionIdRef.current }),
+      fetch: pioneerFetch,
     }),
-    [sessionId]
+    [pioneerFetch]
   );
 
   // --- useChat hook (manages conversation state + streaming) ---
@@ -264,17 +295,6 @@ export default function ChatPage() {
     error,
   } = useChat<PioneerUIMessage>({
     transport,
-    // Handle transient data parts (sessionId from backend)
-    onData: (dataPart) => {
-      if (dataPart.type === 'data-pioneer-session') {
-        const newSessionId = (dataPart.data as { sessionId: string }).sessionId;
-        if (newSessionId && !sessionId) {
-          setSessionId(newSessionId);
-          localStorage.setItem('pioneer_session_id', newSessionId);
-          console.log(`[Pioneer] SessionId recibido y guardado: ${newSessionId}`);
-        }
-      }
-    },
     onError: (err) => {
       console.error('[Pioneer] Chat error:', err);
     },
@@ -295,6 +315,7 @@ export default function ChatPage() {
     const savedSessionId = localStorage.getItem('pioneer_session_id');
     if (savedSessionId) {
       setSessionId(savedSessionId);
+      sessionIdRef.current = savedSessionId;
       // Verify session exists in DB
       fetch(`/api/chat/session?id=${savedSessionId}`)
         .then(res => res.json())
@@ -311,6 +332,7 @@ export default function ChatPage() {
           } else {
             localStorage.removeItem('pioneer_session_id');
             setSessionId(null);
+            sessionIdRef.current = null;
           }
         })
         .catch(() => {

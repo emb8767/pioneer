@@ -2,13 +2,19 @@
 //
 // UIMessage<METADATA, DATA_PARTS, TOOLS>
 //   METADATA = never (we don't use message metadata)
-//   DATA_PARTS = PioneerDataParts (buttons + session)
+//   DATA_PARTS = PioneerDataParts (buttons only — session is via header now)
 //   TOOLS = never (we don't need tool type inference on frontend)
 //
 // Data parts convention:
 //   - In code: key is without "data-" prefix (e.g., 'pioneer-buttons')
 //   - In stream protocol: automatically prefixed as 'data-pioneer-buttons'
 //   - In message.parts[]: type is 'data-pioneer-buttons'
+//
+// SESSION ID DELIVERY:
+//   SessionId is no longer a data part. It's delivered via the
+//   X-Pioneer-Session-Id response header, read by a custom fetch
+//   wrapper in DefaultChatTransport. This is 100% reliable vs
+//   the broken transient data part approach.
 
 import { UIMessage } from 'ai';
 
@@ -32,17 +38,13 @@ export interface ActionContext {
 }
 
 // === CUSTOM DATA PARTS for AI SDK 6 ===
-// Keys here map to stream types:
-//   'pioneer-buttons' → streamed as 'data-pioneer-buttons'
-//   'pioneer-session' → streamed as 'data-pioneer-session' (transient)
+// Only buttons are streamed as data parts now.
+// Session ID is delivered via response header.
 
 export type PioneerDataParts = {
   'pioneer-buttons': {
     buttons: ButtonConfig[];
     actionContext?: ActionContext;
-  };
-  'pioneer-session': {
-    sessionId: string;
   };
 };
 
@@ -50,5 +52,5 @@ export type PioneerDataParts = {
 // Used by useChat<PioneerUIMessage> and createUIMessageStream<PioneerUIMessage>
 export type PioneerUIMessage = UIMessage<
   never,            // METADATA — we don't use message metadata
-  PioneerDataParts  // DATA_PARTS — buttons + session
+  PioneerDataParts  // DATA_PARTS — buttons only
 >;

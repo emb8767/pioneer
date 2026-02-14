@@ -12,12 +12,16 @@
 //
 // ARCHITECTURE:
 //   createUIMessageStream (outer wrapper)
-//     ├─ writer.write(sessionId) — transient, for localStorage
 //     ├─ streamText (LLM call + tool loop)
 //     │   ├─ tools: 4 OAuth tools with Zod schemas
 //     │   └─ stopWhen: stepCountIs(7)
 //     ├─ writer.merge(result.toUIMessageStream()) — streams text to client
 //     └─ after merge: detectButtons → writer.write(buttons)
+//
+// SESSION DELIVERY:
+//   SessionId is sent via X-Pioneer-Session-Id response header.
+//   Frontend reads it with a custom fetch wrapper in DefaultChatTransport.
+//   This replaces the broken transient data part approach.
 
 import { NextRequest } from 'next/server';
 import {
@@ -135,25 +139,18 @@ export async function POST(request: NextRequest) {
     // ═══════════════════════════════════════
     //
     // Flow:
-    // 1. execute() starts → sends sessionId (transient)
+    // 1. execute() starts
     // 2. streamText() calls Claude API with tools
     // 3. writer.merge() pipes LLM text to client in real-time
     // 4. After merge completes → detect buttons → write data part
     // 5. execute() returns → stream closes
+    //
+    // NOTE: sessionId is delivered via response header, NOT via data part.
+    // The transient data part approach was unreliable (onData never fired).
 
     const stream = createUIMessageStream<PioneerUIMessage>({
       async execute({ writer }) {
-        // 1. Send sessionId as transient data part
-        //    (only available in onData callback, not in message.parts)
-        if (sessionId) {
-          writer.write({
-            type: 'data-pioneer-session',
-            data: { sessionId },
-            transient: true,
-          });
-        }
-
-        // 2. Call Claude via streamText with tool loop
+        // Call Claude via streamText with tool loop
         const result = streamText({
           model: anthropic('claude-sonnet-4-5-20250929'),
           system: systemPrompt,
@@ -162,12 +159,12 @@ export async function POST(request: NextRequest) {
           stopWhen: stepCountIs(7),
         });
 
-        // 3. Merge LLM stream into our UI stream (streams text tokens to client)
-        //    This awaits until the entire LLM response is complete
+        // Merge LLM stream into our UI stream (streams text tokens to client)
+        // This awaits until the entire LLM response is complete
         writer.merge(result.toUIMessageStream());
 
-        // 4. After stream completes, get the full text and detect buttons
-        //    result.text is a promise that resolves when streaming finishes
+        // After stream completes, get the full text and detect buttons
+        // result.text is a promise that resolves when streaming finishes
         const fullText = await result.text;
 
         if (fullText) {
@@ -194,7 +191,7 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // 5. execute returns → stream closes automatically
+        // execute returns → stream closes automatically
       },
       onError: (error) => {
         console.error('[Pioneer] Stream error:', error);
@@ -203,9 +200,15 @@ export async function POST(request: NextRequest) {
     });
 
     // ═══════════════════════════════════════
-    // STEP 4: Create response with cookie cleanup
+    // STEP 4: Create response with headers
     // ═══════════════════════════════════════
     const response = createUIMessageStreamResponse({ stream });
+
+    // === SESSION ID via response header ===
+    // This is the reliable delivery mechanism. Frontend reads it with custom fetch.
+    if (sessionId) {
+      response.headers.set('X-Pioneer-Session-Id', sessionId);
+    }
 
     // Clear OAuth cookie if a tool consumed it
     if (toolState.shouldClearOAuthCookie) {
