@@ -145,6 +145,19 @@ async function handleApprovePlan(params: ActionRequest['params']): Promise<Actio
       }
     }
 
+    // 5c. Guardar estrategia del plan en sessions (determinístico — no depende de Claude)
+    try {
+      const strategyDesc = planData.description || '';
+      if (strategyDesc) {
+        await updateSession(params.sessionId, {
+          strategies: [strategyDesc],
+        });
+        console.log(`[Pioneer DB] Estrategia guardada: "${strategyDesc.substring(0, 100)}..."`);
+      }
+    } catch (stratErr) {
+      console.warn('[Pioneer Action] No se pudo guardar estrategia (no-fatal):', stratErr);
+    }
+
     // 6. Calcular próximas fechas para mostrar al cliente
     const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
     const slotDesc = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`).join(', ');
@@ -690,16 +703,12 @@ Extract business information and marketing strategies from this conversation:
   "current_promotion": "any active promotions",
   "services": "main services offered",
   "target_audience": "who their customers are",
-  "additional_info": "any other relevant details",
-  "strategies_selected": ["strategy 1 description", "strategy 2 description"]
+  "additional_info": "any other relevant details"
 }
 
 Rules:
 - Output ONLY the JSON object, nothing else
-- Omit business fields not mentioned in the conversation
-- ALWAYS include strategies_selected — find the marketing strategies proposed and which the client chose
-- If client said "todas" or "all", include all proposed strategies
-- Never leave strategies_selected empty if strategies were discussed`,
+- Omit business fields not mentioned in the conversation`,
     messages: [
       {
         role: 'user',
@@ -732,19 +741,11 @@ Rules:
     businessInfo = JSON.parse(jsonMatch[0]);
   }
 
-  // Separar strategies del business_info
-  const strategies: string[] = businessInfo.strategies_selected || [];
-  delete businessInfo.strategies_selected;
-
   await updateSession(sessionId, {
     business_name: businessInfo.business_name || null,
     business_info: businessInfo,
-    strategies,
     status: 'active',
   });
 
   console.log(`[Pioneer DB] Business info guardado para session ${sessionId}: ${JSON.stringify(businessInfo).substring(0, 200)}...`);
-  if (strategies.length > 0) {
-    console.log(`[Pioneer DB] Estrategias guardadas: ${JSON.stringify(strategies)}`);
-  }
 }
