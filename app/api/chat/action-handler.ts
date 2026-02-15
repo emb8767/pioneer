@@ -161,7 +161,7 @@ async function handleApprovePlan(params: ActionRequest['params']): Promise<Actio
 
     // 6. Calcular próximas fechas para mostrar al cliente
     const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-    const slotDesc = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${s.time}`).join(', ');
+    const slotDesc = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${formatTime12h(s.time)}`).join(', ');
 
     return {
       success: true,
@@ -767,4 +767,14 @@ Rules:
   });
 
   console.log(`[Pioneer DB] Business info guardado para session ${sessionId}: ${JSON.stringify(businessInfo).substring(0, 200)}...`);
+}
+
+// --- Convert 24h time to 12h AM/PM for client display ---
+function formatTime12h(time24: string): string {
+  const [hourStr, minute] = time24.split(':');
+  const hour = parseInt(hourStr, 10);
+  if (isNaN(hour)) return time24;
+  const period = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return `${hour12}:${minute} ${period}`;
 }
