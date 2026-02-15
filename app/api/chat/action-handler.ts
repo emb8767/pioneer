@@ -485,10 +485,28 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
 
     const platformNames = resolvedPlatforms.map(p => p.platform).join(', ');
 
+    // Build completion summary for the last post
+    let completionSummary = '';
+    if (planComplete && planId) {
+      try {
+        const allPosts = await getPostsByPlan(planId);
+        const plan = await getActivePlan(params.sessionId || '');
+        const publishedTitles = allPosts
+          .filter(p => p.status === 'scheduled')
+          .sort((a, b) => a.order_num - b.order_num)
+          .map((p, i) => `${i + 1}. ${p.title || `Post #${p.order_num}`}`)
+          .join('\n');
+
+        completionSummary = `\n\n📋 **Resumen del plan "${plan?.plan_name || 'completado'}":**\n${publishedTitles}\n\n📱 Plataformas: ${platformNames}\n\n¿Qué le gustaría hacer ahora?`;
+      } catch {
+        completionSummary = '\n\n¿Qué le gustaría hacer ahora?';
+      }
+    }
+
     return {
       success: true,
       message: planComplete
-        ? `✅ Post ${timeLabel} en ${platformNames}.\n\n🎉 ¡Plan completado! Se publicaron los ${postCount} posts del plan.`
+        ? `✅ Post ${timeLabel} en ${platformNames}.\n\n🎉 ¡Plan completado! Se publicaron los ${postCount} posts del plan.${completionSummary}`
         : `✅ Post ${timeLabel} en ${platformNames}. (${postsPublished}/${postCount ?? '?'})`,
       buttons: planComplete
         ? [
