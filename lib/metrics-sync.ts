@@ -79,7 +79,7 @@ export async function syncAllMetrics(): Promise<{
           }
 
           await upsertMetric(dbPost.id, {
-            late_post_id: latePostId,
+            late_post_id: lateId,
             platform: post.platform,
             impressions: post.analytics.impressions || 0,
             reach: post.analytics.reach || 0,
