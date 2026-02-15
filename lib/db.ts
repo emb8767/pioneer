@@ -229,7 +229,6 @@ export async function incrementPostsPublished(planId: string): Promise<DbPlan> {
   // RPC returns the updated plan row
   return rpcResult as DbPlan;
 }
-}
 
 // ============================================================
 // POSTS
