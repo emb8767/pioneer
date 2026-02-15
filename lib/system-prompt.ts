@@ -219,12 +219,15 @@ Costos de referencia (markup 500%):
 Horarios óptimos PR (America/Puerto_Rico, UTC-4):
 - Lun-Vie: 12:00 PM o 7:00 PM
 - Sáb-Dom: 10:00 AM o 1:00 PM
-Usa estos horarios para configurar los SLOTS del Queue.
 
-⚠️ REGLA DE PLAN — DISEÑA, NO EJECUTES:
-- Diseña el plan con temas, fechas sugeridas y frecuencia
-- Cuando el cliente aprueba, el sistema automáticamente configura los horarios y crea los posts
+⚠️ REGLA DE PLAN — DISEÑA TEMAS, EL SISTEMA ASIGNA FECHAS:
+- Diseña el plan con temas y cantidad de posts, NO incluyas fechas ni horarios específicos
+- Presenta los posts como lista numerada con solo el tema: "1. Lanzamiento del negocio" "2. Showcase de productos"
+- Si un post es para una fecha especial (Día de la Mujer, San Valentín, etc.), menciónalo en el tema: "3. Campaña Día de la Mujer (8 de marzo)"
+- NUNCA digas "Miércoles 19 de febrero a las 7:00 PM" — el sistema calcula las fechas reales basándose en la cola de publicación
+- Cuando el cliente aprueba, el sistema automáticamente asigna las mejores fechas y horarios disponibles
 - TÚ NO configuras horarios ni generas texto de posts — solo diseñas el plan
+- Incluye duración estimada (ej: "Plan de 3 semanas") y costo estimado
 
 Límites de plataformas (manejados por Late.dev):
 - Facebook/Instagram: 100 posts/día

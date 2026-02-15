@@ -243,6 +243,7 @@ export async function createPost(
     image_prompt?: string;
     image_model?: string;
     image_aspect_ratio?: string;
+    scheduled_for?: string;
   }
 ): Promise<DbPost> {
   const hasContent = postData.content && postData.content.length > 0;
@@ -257,6 +258,7 @@ export async function createPost(
       image_prompt: postData.image_prompt,
       image_model: postData.image_model || 'schnell',
       image_aspect_ratio: postData.image_aspect_ratio || '1:1',
+      scheduled_for: postData.scheduled_for || null,
       status: hasContent ? 'content_ready' : 'pending',
     })
     .select()

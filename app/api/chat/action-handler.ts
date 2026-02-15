@@ -107,38 +107,42 @@ async function handleApprovePlan(params: ActionRequest['params']): Promise<Actio
     // 1. Llamar Claude API aislado para extraer datos estructurados del plan
     console.log(`[Pioneer Action] approve_plan: Extrayendo datos del plan con Claude API...`);
     const planData = await extractPlanData(params.planText);
-    console.log(`[Pioneer Action] Plan extraído: ${planData.posts.length} posts, slots: ${JSON.stringify(planData.slots)}`);
+    console.log(`[Pioneer Action] Plan extraído: ${planData.posts.length} posts`);
 
-    // 2. Setup queue en Late.dev
-    const formattedSlots = planData.slots.map(s => ({
-      dayOfWeek: s.day_of_week,
-      time: s.time,
-    }));
+    // 2. Calculate optimal slots based on post count
+    const optimalSlots = calculateOptimalSlots(planData.posts.length);
 
-    await setupQueueSlots(PIONEER_PROFILE_ID, PR_TIMEZONE, formattedSlots, true);
-    console.log(`[Pioneer Action] Queue configurado: ${formattedSlots.length} slots`);
+    // 3. Setup queue en Late.dev
+    await setupQueueSlots(PIONEER_PROFILE_ID, PR_TIMEZONE, optimalSlots, true);
+    console.log(`[Pioneer Action] Queue configurado: ${optimalSlots.length} slots`);
 
-    // 3. Crear plan en DB
+    // 4. Calculate real publish dates for each post
+    const postSchedule = await calculatePostSchedule(planData.posts, optimalSlots);
+    console.log(`[Pioneer Action] Fechas calculadas: ${postSchedule.map(s => s.date).join(', ')}`);
+
+    // 5. Crear plan en DB
     const dbPlan = await createPlan(params.sessionId, {
       plan_name: planData.plan_name,
       description: planData.description,
       post_count: planData.posts.length,
-      queue_slots: formattedSlots,
+      queue_slots: optimalSlots,
     });
     console.log(`[Pioneer DB] Plan creado: ${dbPlan.id} (${planData.posts.length} posts)`);
 
-    // 4. Crear todos los posts en DB con status 'pending'
+    // 6. Crear todos los posts en DB con status 'pending' y scheduled_for
     for (let i = 0; i < planData.posts.length; i++) {
       const postInfo = planData.posts[i];
+      const schedule = postSchedule[i];
       await createPost(dbPlan.id, {
         order_num: i + 1,
         title: postInfo.title,
-        content: '', // Se llena cuando se genera el texto
+        content: '',
+        scheduled_for: schedule?.date || undefined,
       });
     }
     console.log(`[Pioneer DB] ${planData.posts.length} posts creados en DB (pending)`);
 
-    // 5b. Extraer y guardar business_info de la conversación (para persistencia entre sesiones)
+    // 7. Extraer y guardar business_info de la conversación
     if (params.conversationContext) {
       try {
         await extractAndSaveBusinessInfo(params.sessionId, params.conversationContext);
@@ -147,7 +151,7 @@ async function handleApprovePlan(params: ActionRequest['params']): Promise<Actio
       }
     }
 
-    // 5c. Guardar estrategia del plan en sessions (determinístico — no depende de Claude)
+    // 8. Guardar estrategia del plan en sessions (determinístico)
     try {
       const strategyDesc = planData.description || '';
       if (strategyDesc) {
@@ -160,13 +164,15 @@ async function handleApprovePlan(params: ActionRequest['params']): Promise<Actio
       console.warn('[Pioneer Action] No se pudo guardar estrategia (no-fatal):', stratErr);
     }
 
-    // 6. Calcular próximas fechas para mostrar al cliente
-    const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-    const slotDesc = formattedSlots.map(s => `${days[s.dayOfWeek]} a las ${formatTime12h(s.time)}`).join(', ');
+    // 9. Build schedule description for client
+    const scheduleDesc = postSchedule.map((s, i) => {
+      const postTitle = planData.posts[i]?.title || `Post ${i + 1}`;
+      return `${i + 1}. ${postTitle} — ${s.displayDate}`;
+    }).join('\n');
 
     return {
       success: true,
-      message: `✅ ¡Plan aprobado! ${planData.posts.length} posts programados.\n\n📅 Horarios de publicación: ${slotDesc}\n\n¿Listo para crear el primer post?`,
+      message: `✅ ¡Plan aprobado! ${planData.posts.length} posts programados.\n\n📅 Calendario de publicación:\n${scheduleDesc}\n\n¿Listo para crear el primer post?`,
       buttons: [
         { id: 'first_post', label: '▶️ Crear primer post', type: 'action', style: 'primary', action: 'next_post' },
       ],
@@ -433,12 +439,16 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     return { success: false, message: `Error creando borrador: ${msg}`, error: 'draft_error' };
   }
 
-  // Activar via Queue
+  // Activar via Queue or scheduledFor
   const activateData: Record<string, unknown> = {};
   if (params.publishNow) {
     activateData.publishNow = true;
   } else if (params.scheduledFor) {
     activateData.scheduledFor = params.scheduledFor;
+    activateData.timezone = PR_TIMEZONE;
+  } else if (post.scheduled_for) {
+    // Use pre-calculated date from plan approval
+    activateData.scheduledFor = post.scheduled_for;
     activateData.timezone = PR_TIMEZONE;
   } else {
     activateData.queuedFromProfile = PIONEER_PROFILE_ID;
@@ -606,8 +616,7 @@ async function resolvePost(params: ActionRequest['params']) {
 interface PlanData {
   plan_name: string;
   description: string;
-  slots: Array<{ day_of_week: number; time: string }>;
-  posts: Array<{ title: string; post_type: string; details: string }>;
+  posts: Array<{ title: string; post_type: string; details: string; target_date?: string }>;
 }
 
 async function extractPlanData(planText: string): Promise<PlanData> {
@@ -622,19 +631,15 @@ The JSON must have this exact structure:
 {
   "plan_name": "short name of the plan",
   "description": "one sentence description",
-  "slots": [{"day_of_week": 1, "time": "12:00"}, ...],
-  "posts": [{"title": "Post title/theme", "post_type": "offer|educational|testimonial|behind-scenes|urgency|cta|branding|interactive", "details": "what this post should be about"}, ...]
+  "posts": [{"title": "Post title/theme", "post_type": "offer|educational|testimonial|behind-scenes|urgency|cta|branding|interactive", "details": "what this post should be about", "target_date": "YYYY-MM-DD or null"}, ...]
 }
-
-Rules for slots:
-- day_of_week: 0=sunday, 1=monday, 2=tuesday, 3=wednesday, 4=thursday, 5=friday, 6=saturday
-- Extract the unique day+time combinations from the post schedule
-- time format: "HH:MM" in 24h (e.g., "19:00" for 7:00 PM, "12:00" for 12:00 PM)
 
 Rules for posts:
 - Extract each post in order
-- post_type should match the theme (promotional=offer, educational=educational, brand story=branding, etc.)
-- details should describe what the post is about including any specific promotions, topics, or angles mentioned`,
+- post_type should match the theme
+- details should describe what the post is about
+- target_date: If the post is tied to a specific calendar date (e.g., "Día de la Mujer" = March 8), set the target date as YYYY-MM-DD. The post should be published ON or BEFORE this date. If the post has no specific date, set target_date to null.
+- Examples: "Campaña Día de la Mujer (8 de marzo)" → target_date: "2026-03-08". "Lanzamiento del negocio" → target_date: null`,
     messages: [{
       role: 'user',
       content: planText,
@@ -652,7 +657,6 @@ Rules for posts:
 
   // Validación básica
   if (!parsed.posts || parsed.posts.length === 0) throw new Error('Plan sin posts');
-  if (!parsed.slots || parsed.slots.length === 0) throw new Error('Plan sin horarios');
 
   return parsed;
 }
@@ -815,4 +819,167 @@ function formatTime12h(time24: string): string {
   const period = hour >= 12 ? 'PM' : 'AM';
   const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
   return `${hour12}:${minute} ${period}`;
+}
+
+// --- Calculate optimal queue slots based on post count ---
+function calculateOptimalSlots(postCount: number): Array<{ dayOfWeek: number; time: string }> {
+  // Optimal posting times for PR (America/Puerto_Rico)
+  const allSlots = [
+    { dayOfWeek: 1, time: '19:00' }, // Lunes 7PM
+    { dayOfWeek: 3, time: '12:00' }, // Miércoles 12PM
+    { dayOfWeek: 5, time: '19:00' }, // Viernes 7PM
+    { dayOfWeek: 0, time: '13:00' }, // Domingo 1PM
+    { dayOfWeek: 2, time: '19:00' }, // Martes 7PM
+    { dayOfWeek: 4, time: '12:00' }, // Jueves 12PM
+    { dayOfWeek: 6, time: '10:00' }, // Sábado 10AM
+  ];
+
+  // Use enough slots to cover posts without spreading too thin
+  // 1-3 posts → 2 slots/week, 4-7 → 3 slots, 8+ → 4 slots
+  const slotsNeeded = postCount <= 3 ? 2 : postCount <= 7 ? 3 : 4;
+  return allSlots.slice(0, Math.min(slotsNeeded, allSlots.length));
+}
+
+// --- Calculate real publish dates for each post ---
+interface PostScheduleEntry {
+  date: string;       // ISO date for scheduledFor
+  displayDate: string; // Human-readable for client
+}
+
+async function calculatePostSchedule(
+  posts: Array<{ title: string; target_date?: string }>,
+  slots: Array<{ dayOfWeek: number; time: string }>
+): Promise<PostScheduleEntry[]> {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Puerto_Rico' }));
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+
+  // Separate seasonal (has target_date) and normal posts
+  const schedule: PostScheduleEntry[] = new Array(posts.length);
+  const usedDates = new Set<string>(); // Track dates to avoid double-posting
+
+  // First pass: assign seasonal posts to their target dates or closest slot before
+  for (let i = 0; i < posts.length; i++) {
+    const post = posts[i];
+    if (post.target_date) {
+      const targetDate = new Date(post.target_date + 'T00:00:00');
+      // Find the closest slot on or before the target date
+      const slotDate = findClosestSlotOnOrBefore(targetDate, slots, today, usedDates);
+      if (slotDate) {
+        const dateKey = slotDate.toISOString().split('T')[0];
+        usedDates.add(dateKey);
+        schedule[i] = formatScheduleEntry(slotDate);
+      }
+    }
+  }
+
+  // Second pass: assign normal posts to next available slots
+  let nextSlotDate = getNextSlotDate(today, slots, usedDates);
+  for (let i = 0; i < posts.length; i++) {
+    if (schedule[i]) continue; // Already assigned (seasonal)
+
+    // Find next available slot that's not taken
+    while (nextSlotDate && usedDates.has(nextSlotDate.toISOString().split('T')[0])) {
+      nextSlotDate = getNextSlotDate(nextSlotDate, slots, usedDates, true);
+    }
+
+    if (nextSlotDate) {
+      const dateKey = nextSlotDate.toISOString().split('T')[0];
+      usedDates.add(dateKey);
+      schedule[i] = formatScheduleEntry(nextSlotDate);
+      nextSlotDate = getNextSlotDate(nextSlotDate, slots, usedDates, true);
+    } else {
+      // Fallback: just use tomorrow
+      const fallback = new Date(today);
+      fallback.setDate(fallback.getDate() + i + 1);
+      schedule[i] = formatScheduleEntry(fallback);
+    }
+  }
+
+  return schedule;
+}
+
+function findClosestSlotOnOrBefore(
+  targetDate: Date,
+  slots: Array<{ dayOfWeek: number; time: string }>,
+  today: Date,
+  usedDates: Set<string>
+): Date | null {
+  // Try the target date first, then go backwards to find a slot day
+  for (let daysBack = 0; daysBack <= 14; daysBack++) {
+    const candidateDate = new Date(targetDate);
+    candidateDate.setDate(candidateDate.getDate() - daysBack);
+
+    if (candidateDate < today) break; // Don't go before today
+
+    const dayOfWeek = candidateDate.getDay();
+    const matchingSlot = slots.find(s => s.dayOfWeek === dayOfWeek);
+
+    if (matchingSlot) {
+      const dateKey = candidateDate.toISOString().split('T')[0];
+      if (!usedDates.has(dateKey)) {
+        // Set the time from the slot
+        const [hour, minute] = matchingSlot.time.split(':');
+        candidateDate.setHours(parseInt(hour, 10), parseInt(minute, 10), 0, 0);
+        return candidateDate;
+      }
+    }
+  }
+
+  // If no slot found before target, use the target date itself at a default time
+  if (targetDate >= today) {
+    const dateKey = targetDate.toISOString().split('T')[0];
+    if (!usedDates.has(dateKey)) {
+      targetDate.setHours(10, 0, 0, 0);
+      return targetDate;
+    }
+  }
+
+  return null;
+}
+
+function getNextSlotDate(
+  fromDate: Date,
+  slots: Array<{ dayOfWeek: number; time: string }>,
+  usedDates: Set<string>,
+  skipCurrentDay = false
+): Date | null {
+  const startOffset = skipCurrentDay ? 1 : 0;
+
+  // Look up to 30 days ahead
+  for (let daysAhead = startOffset; daysAhead <= 30; daysAhead++) {
+    const candidateDate = new Date(fromDate);
+    candidateDate.setDate(candidateDate.getDate() + daysAhead);
+
+    const dayOfWeek = candidateDate.getDay();
+    const matchingSlot = slots.find(s => s.dayOfWeek === dayOfWeek);
+
+    if (matchingSlot) {
+      const dateKey = candidateDate.toISOString().split('T')[0];
+      if (!usedDates.has(dateKey)) {
+        const [hour, minute] = matchingSlot.time.split(':');
+        candidateDate.setHours(parseInt(hour, 10), parseInt(minute, 10), 0, 0);
+        return candidateDate;
+      }
+    }
+  }
+  return null;
+}
+
+function formatScheduleEntry(date: Date): PostScheduleEntry {
+  const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+  const dayName = days[date.getDay()];
+  const dayNum = date.getDate();
+  const monthName = months[date.getMonth()];
+  const hours = date.getHours();
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  const period = hours >= 12 ? 'PM' : 'AM';
+  const hour12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+
+  return {
+    date: date.toISOString(),
+    displayDate: `${dayName} ${dayNum} de ${monthName} a las ${hour12}:${minutes} ${period}`,
+  };
 }
