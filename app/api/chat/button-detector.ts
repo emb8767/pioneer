@@ -82,7 +82,10 @@ export function detectButtons(text: string, state?: DetectorState): ButtonConfig
   }
 
   // 5. Oferta de imagen (¿quiere que genere imagen?)
-  if (/¿(le gustaría|quiere|desea)\s+(que\s+)?(genere|crear|generar|hacer|prepare|diseñe)\s+(una\s+)?imagen|generar una imagen.*\?|imagen.*para acompañar|imagen.*profesional|preparar.*imagen/i.test(tail)) {
+  // STRICT: Only match direct questions about generating an image for the client.
+  // Must NOT match informational mentions like "Imagen profesional con IA: $0.015"
+  if (/¿(le gustaría|quiere|desea)\s+(que\s+)?(le\s+)?(genere|crear|generar|hacer|prepare|diseñe)\s+(una\s+)?imagen/i.test(tail) ||
+      /¿.*generar una imagen.*\?/i.test(tail)) {
     console.log(`[ButtonDetector] P5 MATCH: image offer`);
     return buildImageOfferButtons();
   }
