@@ -725,6 +725,7 @@ Extract business information and marketing strategies from this conversation:
   "location": "city, area, or address",
   "phone": "phone number",
   "hours": "business hours",
+  "email": "business email if mentioned",
   "years_in_business": "how long they've been operating",
   "how_clients_arrive": "how customers find them",
   "goal": "what they want to achieve with marketing",
@@ -774,6 +775,7 @@ Rules:
   await updateSession(sessionId, {
     business_name: businessInfo.business_name || null,
     business_info: businessInfo,
+    email: businessInfo.email || null,
     status: 'active',
   });
 

@@ -40,7 +40,7 @@ import type { DetectorState } from './button-detector';
 import { getOAuthCookie } from '@/lib/oauth-cookie';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import { COOKIE_NAME } from '@/lib/oauth-cookie';
-import { createSession, getSession, getActivePlan, getPlanProgress } from '@/lib/db';
+import { createSession, getSession, getActivePlan, getAllPlans, getPlanProgress } from '@/lib/db';
 import type { PioneerUIMessage } from '@/lib/ai-types';
 
 // Allow streaming responses up to 60 seconds (Vercel serverless)
@@ -52,6 +52,7 @@ interface SessionContext {
   businessInfo: Record<string, unknown>;
   status: string;
   planSummary?: { name: string | null; postCount: number; postsPublished: number } | null;
+  planHistory?: Array<{ name: string | null; postCount: number; postsPublished: number; status: string }>;
 }
 
 export async function POST(request: NextRequest) {
@@ -106,6 +107,16 @@ export async function POST(request: NextRequest) {
                     postsPublished: progress.postsPublished,
                   };
                 }
+              }
+              // Load all plans for history
+              const allPlans = await getAllPlans(sessionId);
+              if (allPlans.length > 0) {
+                sessionContext.planHistory = allPlans.map(p => ({
+                  name: p.plan_name,
+                  postCount: p.post_count,
+                  postsPublished: p.posts_published,
+                  status: p.status,
+                }));
               }
             } catch { /* don't block if plan lookup fails */ }
           }

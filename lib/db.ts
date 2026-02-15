@@ -18,6 +18,7 @@ export interface DbSession {
   business_info: Record<string, unknown>;
   interview_data: Record<string, unknown>;
   strategies: string[];
+  email: string | null;
   status: 'interview' | 'strategy' | 'planning' | 'active' | 'completed';
   created_at: string;
   updated_at: string;
@@ -96,7 +97,7 @@ export async function getSession(sessionId: string): Promise<DbSession | null> {
 
 export async function updateSession(
   sessionId: string,
-  updates: Partial<Pick<DbSession, 'business_name' | 'business_info' | 'interview_data' | 'strategies' | 'status'>>
+  updates: Partial<Pick<DbSession, 'business_name' | 'business_info' | 'interview_data' | 'strategies' | 'email' | 'status'>>
 ): Promise<DbSession> {
   const { data, error } = await supabase
     .from('sessions')
@@ -169,6 +170,17 @@ export async function getActivePlan(sessionId: string): Promise<DbPlan | null> {
     throw new Error(`Error getting active plan: ${error.message}`);
   }
   return data;
+}
+
+export async function getAllPlans(sessionId: string): Promise<DbPlan[]> {
+  const { data, error } = await supabase
+    .from('plans')
+    .select()
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: false });
+
+  if (error) return [];
+  return data || [];
 }
 
 export async function approvePlan(planId: string): Promise<DbPlan> {

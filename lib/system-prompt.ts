@@ -99,6 +99,7 @@ export function buildSystemPrompt(sessionContext?: {
   businessInfo: Record<string, unknown>;
   status: string;
   planSummary?: { name: string | null; postCount: number; postsPublished: number } | null;
+  planHistory?: Array<{ name: string | null; postCount: number; postsPublished: number; status: string }>;
 }): string {
   const fechaActual = getCurrentDateForPrompt();
   const upcomingDates = getUpcomingDates();
@@ -138,6 +139,18 @@ ${sessionContext.planSummary ? `
 Plan activo: "${sessionContext.planSummary.name || 'Sin nombre'}"
 Progreso: ${sessionContext.planSummary.postsPublished}/${sessionContext.planSummary.postCount} posts publicados
 ` : '- No tiene plan activo actualmente'}
+${sessionContext.planHistory && sessionContext.planHistory.length > 0 ? `
+=== HISTORIAL DE CAMPAÑAS ===
+${sessionContext.planHistory.map(p => {
+  const statusLabel = p.status === 'completed' ? '✅ Completada' : p.status === 'in_progress' ? '🔄 En progreso' : p.status;
+  return `- "${p.name || 'Sin nombre'}" (${p.postsPublished}/${p.postCount} posts) — ${statusLabel}`;
+}).join('\n')}
+
+Usa este historial para:
+- Sugerir estrategias DIFERENTES a las ya usadas
+- Referenciar campañas anteriores al proponer nuevas ideas
+- No repetir el mismo tipo de contenido
+` : ''}
 `;
   }
 
@@ -177,6 +190,18 @@ Reglas CRÍTICAS que Pioneer SIEMPRE debe cumplir:
 - Ser transparente: decirle al cliente cuántas preguntas hay y dejarle elegir
 - Cuando el cliente responde las preguntas elegidas → ANALIZAR SEÑALES → PROPONER ESTRATEGIAS → luego crear plan
 - NUNCA mostrar nombres técnicos de estrategias (IDs, números). Presentar opciones en lenguaje natural del cliente.
+
+⚠️ REGLA PARA TERMINAR CONVERSACIÓN:
+- Si el cliente dice "terminamos", "listo", "eso es todo", "no más", "hasta aquí" o cualquier señal de que quiere parar:
+  - RESPETA su decisión inmediatamente
+  - NO presentes un plan nuevo ni pidas confirmación adicional
+  - Despídete cordialmente y dile que aquí estará cuando lo necesite
+  - NUNCA generes un plan, lista de posts, ni preguntes "¿Desea aprobar?" después de que el cliente dijo que terminó
+
+⚠️ REGLA DE EMAIL:
+- Durante la entrevista, cuando preguntes el teléfono y horario, también pregunta su email/correo electrónico.
+- Explica que es para enviarle notificaciones cuando haya ideas nuevas para su negocio.
+- Si no quiere dar email, respeta su decisión y continúa sin insistir.
 
 === SELECCIÓN DE ESTRATEGIAS ===
 Cuando presentes estrategias al cliente:
