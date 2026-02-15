@@ -245,6 +245,14 @@ export default function ChatPage() {
     businessName: string | null;
     plan: { name: string; postCount: number; postsPublished: number } | null;
   } | null>(null);
+  // Suggestions from suggestion engine (Fase 7)
+  const [suggestions, setSuggestions] = useState<Array<{
+    id: string;
+    type: string;
+    title: string;
+    description: string;
+    priority: number;
+  }>>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -333,6 +341,16 @@ export default function ChatPage() {
                 businessName: data.businessName,
                 plan: data.plan || null,
               });
+              // Fetch pending suggestions
+              fetch(`/api/suggestions?sessionId=${savedSessionId}`)
+                .then(res => res.json())
+                .then(sugData => {
+                  if (sugData.suggestions?.length > 0) {
+                    setSuggestions(sugData.suggestions);
+                    console.log(`[Pioneer] ${sugData.suggestions.length} sugerencias cargadas`);
+                  }
+                })
+                .catch(() => { /* non-fatal */ });
             } else {
               console.log(`[Pioneer] Sesión restaurada (entrevista en progreso): ${data.sessionId}`);
             }
@@ -578,6 +596,35 @@ export default function ChatPage() {
                   <p className="text-gray-500 mb-8 text-lg">
                     {welcomeData.businessName} — ¿qué hacemos hoy?
                   </p>
+
+                  {/* Suggestion cards from suggestion engine */}
+                  {suggestions.length > 0 && (
+                    <div className="w-full max-w-lg mb-6">
+                      <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Sugerencias para su negocio</p>
+                      <div className="space-y-2">
+                        {suggestions.map((sug) => (
+                          <button
+                            key={sug.id}
+                            onClick={() => {
+                              // Mark as accepted
+                              fetch('/api/suggestions', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ suggestionId: sug.id, action: 'accepted' }),
+                              }).catch(() => {});
+                              setSuggestions(prev => prev.filter(s => s.id !== sug.id));
+                              handleSuggestionClick(sug.title);
+                            }}
+                            className="w-full px-4 py-3 rounded-xl border border-blue-200 bg-blue-50 text-left hover:bg-blue-100 hover:border-blue-300 transition-all duration-200 cursor-pointer"
+                          >
+                            <span className="text-sm font-medium text-blue-800">{sug.title}</span>
+                            <span className="block text-xs text-blue-600 mt-0.5">{sug.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
                     <WelcomeSuggestion
                       text="Crear un nuevo plan de marketing"
