@@ -311,7 +311,10 @@ function getUpcoming14Days(): string | null {
     }> = JSON.parse(raw);
 
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Puerto_Rico' }));
-    const windowEnd = new Date(now);
+    // Compare with start of today, not current time — prevents past dates from appearing
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    const windowEnd = new Date(today);
     windowEnd.setDate(windowEnd.getDate() + 14);
     const currentYear = now.getFullYear();
 
@@ -320,10 +323,10 @@ function getUpcoming14Days(): string | null {
     for (const entry of calendar) {
       if (!entry.day) continue;
       const entryDate = new Date(currentYear, entry.month - 1, entry.day);
-      if (entryDate < now) entryDate.setFullYear(currentYear + 1);
+      if (entryDate < today) entryDate.setFullYear(currentYear + 1);
 
-      if (entryDate >= now && entryDate <= windowEnd) {
-        const daysAway = Math.ceil((entryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      if (entryDate >= today && entryDate <= windowEnd) {
+        const daysAway = Math.round((entryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
         // Include exact date so Claude never guesses
         const exactDate = entryDate.toLocaleDateString('es-PR', { weekday: 'long', day: 'numeric', month: 'long' });
         const urgency = daysAway === 0 ? 'HOY' : daysAway === 1 ? 'MAÑANA' : `en ${daysAway} días`;

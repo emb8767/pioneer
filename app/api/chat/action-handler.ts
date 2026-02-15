@@ -35,6 +35,7 @@ import {
   getSession,
 } from '@/lib/db';
 import type { ButtonConfig } from './button-detector';
+import { sendPlanCompleteEmail } from '@/lib/brevo-client';
 
 // === TIPOS ===
 
@@ -510,6 +511,24 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
           .join('\n');
 
         completionSummary = `\n\n📋 **Resumen del plan "${plan?.plan_name || 'completado'}":**\n${publishedTitles}\n\n📱 Plataformas: ${platformNames}\n\n¿Qué le gustaría hacer ahora?`;
+
+        // Send plan completion email if client has email
+        if (params.sessionId) {
+          try {
+            const session = await getSession(params.sessionId);
+            if (session?.email) {
+              await sendPlanCompleteEmail(
+                session.business_name || 'Su negocio',
+                session.email,
+                plan?.plan_name || 'Campaña completada',
+                postCount || allPosts.length
+              );
+              console.log(`[Pioneer] Plan completion email sent to ${session.email}`);
+            }
+          } catch (emailErr) {
+            console.warn('[Pioneer] Could not send plan completion email:', emailErr);
+          }
+        }
       } catch {
         completionSummary = '\n\n¿Qué le gustaría hacer ahora?';
       }
@@ -667,7 +686,13 @@ REGLAS DE CALIDAD — OBLIGATORIO:
 - NUNCA inventes testimonios, marcas, precios, o datos no proporcionados.
 - NUNCA uses placeholders como [dirección] o [teléfono].
 - Escribe el post LISTO PARA PUBLICAR — no incluyas explicación ni título.
-- NO incluyas "Post #N" ni "---" ni nada que no sea el post.`,
+- NO incluyas "Post #N" ni "---" ni nada que no sea el post.
+
+⚠️ REGLA CRÍTICA — TÍTULO DEL POST:
+- El título del post define el TEMA EXACTO. Respétalo al 100%.
+- Si el título dice "Día de la Mujer", escribe sobre el Día de la Mujer. NUNCA lo cambies a "Día de la Madre" ni otro evento.
+- Si el título dice "Recordatorio", escribe un recordatorio, no un post nuevo.
+- NUNCA sustituyas un evento/fecha por otro diferente.`,
     messages: [{
       role: 'user',
       content: `Contexto del negocio y plan:\n${input.conversationContext}\n\nGenera el Post #${input.postNumber} de ${input.totalPosts}: "${input.postTitle}"\n\nEscribe SOLO el texto del post, listo para publicar.`,

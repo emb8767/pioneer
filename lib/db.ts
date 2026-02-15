@@ -199,25 +199,36 @@ export async function approvePlan(planId: string): Promise<DbPlan> {
 }
 
 export async function incrementPostsPublished(planId: string): Promise<DbPlan> {
-  // Use RPC for atomic increment to avoid race conditions
-  const plan = await getPlan(planId);
-  if (!plan) throw new Error(`Plan not found: ${planId}`);
+  // Atomic increment using Supabase RPC to avoid race conditions
+  const { data: rpcResult, error: rpcError } = await supabase
+    .rpc('increment_posts_published', { p_plan_id: planId });
 
-  const newCount = plan.posts_published + 1;
-  const isComplete = newCount >= plan.post_count;
+  if (rpcError) {
+    // Fallback to manual increment if RPC not available yet
+    console.warn('[Pioneer DB] RPC not available, using fallback:', rpcError.message);
+    const plan = await getPlan(planId);
+    if (!plan) throw new Error(`Plan not found: ${planId}`);
 
-  const { data, error } = await supabase
-    .from('plans')
-    .update({
-      posts_published: newCount,
-      status: isComplete ? 'completed' : 'in_progress',
-    })
-    .eq('id', planId)
-    .select()
-    .single();
+    const newCount = plan.posts_published + 1;
+    const isComplete = newCount >= plan.post_count;
 
-  if (error) throw new Error(`Error incrementing posts_published: ${error.message}`);
-  return data;
+    const { data, error } = await supabase
+      .from('plans')
+      .update({
+        posts_published: newCount,
+        status: isComplete ? 'completed' : 'in_progress',
+      })
+      .eq('id', planId)
+      .select()
+      .single();
+
+    if (error) throw new Error(`Error incrementing posts_published: ${error.message}`);
+    return data;
+  }
+
+  // RPC returns the updated plan row
+  return rpcResult as DbPlan;
+}
 }
 
 // ============================================================
