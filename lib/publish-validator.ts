@@ -13,8 +13,25 @@ import {
   PR_TIMEZONE,
   LateApiError,
 } from '@/lib/late-client';
-import { PLATFORM_CHAR_LIMITS } from '@/lib/content-generator';
 import type { Platform, LatePlatformTarget, LatePost } from '@/lib/types';
+
+// === CHARACTER LIMITS PER PLATFORM ===
+// Moved from content-generator.ts (now deleted) since this is the only consumer
+const PLATFORM_CHAR_LIMITS: Record<Platform, number> = {
+  twitter: 280,
+  instagram: 2200,
+  facebook: 63206,
+  linkedin: 3000,
+  tiktok: 2200,
+  youtube: 5000,
+  pinterest: 500,
+  reddit: 40000,
+  bluesky: 300,
+  threads: 500,
+  googlebusiness: 1500,
+  telegram: 4096,
+  snapchat: 250,
+};
 
 // === LIMPIAR MARKDOWN Y FORMATO PARA REDES SOCIALES ===
 export function stripMarkdown(text: string): string {
