@@ -48,15 +48,30 @@ export async function syncAllMetrics(): Promise<{
 
       for (const post of result.posts) {
         try {
-          // Find the Pioneer post by late_draft_id or late_post_id
-          const latePostId = post.latePostId || post.postId;
+          // Late.dev provides latePostId which should match our late_draft_id or late_post_id
+          const lateId = post.latePostId || post.postId;
           
-          // Try to find the post in our DB by late_draft_id
-          const { data: dbPost } = await supabase
+          // Try to find the post in our DB — check both ID fields
+          let dbPost = null;
+          
+          // First try late_post_id (set after activation)
+          const { data: byPostId } = await supabase
             .from('posts')
             .select('id')
-            .or(`late_draft_id.eq.${latePostId},late_post_id.eq.${latePostId}`)
+            .eq('late_post_id', lateId)
             .maybeSingle();
+          
+          if (byPostId) {
+            dbPost = byPostId;
+          } else {
+            // Fallback: try late_draft_id (set at draft creation)
+            const { data: byDraftId } = await supabase
+              .from('posts')
+              .select('id')
+              .eq('late_draft_id', lateId)
+              .maybeSingle();
+            dbPost = byDraftId;
+          }
 
           if (!dbPost) {
             // Post not in our DB — might be from before we tracked, skip

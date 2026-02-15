@@ -444,7 +444,10 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
   }
 
   try {
-    await activateDraftWithRetry(draftId, activateData);
+    const activateResult = await activateDraftWithRetry(draftId, activateData);
+
+    // Save the activated post ID (may differ from draft ID)
+    const activatedPostId = activateResult.post?._id || draftId;
 
     const timeLabel = activateData.publishNow
       ? 'publicado ahora'
@@ -460,6 +463,14 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
 
     try {
       await markPostScheduled(post.id, draftId);
+      // Also save the activated post ID for analytics correlation
+      if (activatedPostId && activatedPostId !== draftId) {
+        await updatePost(post.id, { late_post_id: activatedPostId });
+        console.log(`[Pioneer DB] late_post_id guardado: ${activatedPostId} (draft: ${draftId})`);
+      } else {
+        // Same ID — save it as late_post_id too for metrics sync
+        await updatePost(post.id, { late_post_id: draftId });
+      }
     } catch (dbErr) {
       console.error('[Pioneer DB] Error marcando post:', dbErr);
     }

@@ -289,7 +289,7 @@ function buildSessionContext(session: SessionWithPlans, metricsContext: string |
     month: 'long',
     day: 'numeric',
   });
-  parts.push(`=== TODAY ===\n${now}`);
+  parts.push(`=== TODAY ===\nHoy es ${now}. NUNCA inventes ni adivines fechas. Usa SOLO las fechas exactas del calendario de arriba.`);
 
   return parts.join('\n\n');
 }
@@ -324,7 +324,10 @@ function getUpcoming14Days(): string | null {
 
       if (entryDate >= now && entryDate <= windowEnd) {
         const daysAway = Math.ceil((entryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        upcoming.push(`- ${entry.name} (in ${daysAway} days) — ${entry.opportunity}. Industries: ${entry.industries.join(', ')}`);
+        // Include exact date so Claude never guesses
+        const exactDate = entryDate.toLocaleDateString('es-PR', { weekday: 'long', day: 'numeric', month: 'long' });
+        const urgency = daysAway === 0 ? 'HOY' : daysAway === 1 ? 'MAÑANA' : `en ${daysAway} días`;
+        upcoming.push(`- ${entry.name} — FECHA EXACTA: ${exactDate} (${urgency}) — ${entry.opportunity}. Industries: ${entry.industries.join(', ')}`);
       }
     }
 
