@@ -13,7 +13,7 @@ const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
 
 const SENDER = {
   name: 'Pioneer Agent',
-  email: 'info@pioneeragt.com',
+  email: 'pioneer@internetprotegida.net',
 };
 
 // ============================================================
