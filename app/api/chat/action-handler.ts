@@ -24,6 +24,7 @@ import {
   getPost,
   updatePost,
   getActivePlan,
+  getPlan,
   getPostsByPlan,
   createPlan,
   createPost,
@@ -490,7 +491,7 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
     if (planComplete && planId) {
       try {
         const allPosts = await getPostsByPlan(planId);
-        const plan = await getActivePlan(params.sessionId || '');
+        const plan = await getPlan(planId);
         const publishedTitles = allPosts
           .filter(p => p.status === 'scheduled')
           .sort((a, b) => a.order_num - b.order_num)
