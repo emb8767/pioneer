@@ -517,3 +517,100 @@ export function getNextOptimalTime(): string {
 }
 
 export const PR_TIMEZONE = 'America/Puerto_Rico';
+
+// ═══════════════════════════════════════════════════════
+// ANALYTICS — Late.dev Analytics Add-on
+// ═══════════════════════════════════════════════════════
+
+export interface LateAnalyticsPost {
+  postId: string;
+  latePostId: string | null;
+  status: string;
+  content: string;
+  publishedAt: string | null;
+  platform: string;
+  platformPostUrl: string | null;
+  isExternal: boolean;
+  analytics: {
+    impressions: number;
+    reach: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    clicks: number;
+    views: number;
+    engagementRate: number;
+    lastUpdated: string;
+  };
+}
+
+export interface LateAnalyticsListResponse {
+  posts: LateAnalyticsPost[];
+  pagination: {
+    total: number;
+    page: number;
+    limit: number;
+    pages: number;
+  };
+}
+
+/**
+ * Fetch analytics for all posts from Late.dev
+ * Requires analytics add-on to be active
+ */
+export async function fetchAnalytics(options?: {
+  profileId?: string;
+  source?: 'late' | 'external' | 'all';
+  fromDate?: string;
+  toDate?: string;
+  limit?: number;
+  page?: number;
+  sortBy?: 'date' | 'engagement';
+}): Promise<LateAnalyticsListResponse> {
+  const params = new URLSearchParams();
+  if (options?.profileId) params.set('profileId', options.profileId);
+  if (options?.source) params.set('source', options.source);
+  if (options?.fromDate) params.set('fromDate', options.fromDate);
+  if (options?.toDate) params.set('toDate', options.toDate);
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.page) params.set('page', String(options.page));
+  if (options?.sortBy) params.set('sortBy', options.sortBy);
+
+  const query = params.toString();
+  const endpoint = `/analytics${query ? `?${query}` : ''}`;
+
+  return lateRequest<LateAnalyticsListResponse>(endpoint);
+}
+
+/**
+ * Fetch analytics for a single post by Late post ID
+ */
+export async function fetchPostAnalytics(postId: string): Promise<LateAnalyticsPost> {
+  return lateRequest<LateAnalyticsPost>(`/analytics?postId=${postId}`);
+}
+
+/**
+ * Fetch follower stats for connected accounts
+ */
+export async function fetchFollowerStats(options?: {
+  profileId?: string;
+  fromDate?: string;
+  toDate?: string;
+}): Promise<{
+  accounts: Array<{
+    _id: string;
+    platform: string;
+    username: string;
+    currentFollowers: number;
+    growth: number;
+    growthPercentage: number;
+  }>;
+}> {
+  const params = new URLSearchParams();
+  if (options?.profileId) params.set('profileId', options.profileId);
+  if (options?.fromDate) params.set('fromDate', options.fromDate);
+  if (options?.toDate) params.set('toDate', options.toDate);
+
+  const query = params.toString();
+  return lateRequest(`/accounts/follower-stats${query ? `?${query}` : ''}`);
+}

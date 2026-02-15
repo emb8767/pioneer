@@ -388,3 +388,107 @@ export async function getPlanProgress(planId: string): Promise<{
     isComplete: plan.posts_published >= plan.post_count,
   };
 }
+
+// ============================================================
+// METRICS (Fase 8 — Late.dev Analytics)
+// ============================================================
+
+export interface DbMetric {
+  id: string;
+  post_id: string;
+  late_post_id: string | null;
+  platform: string;
+  impressions: number;
+  reach: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  clicks: number;
+  views: number;
+  engagement_rate: number;
+  synced_at: string;
+}
+
+export async function upsertMetric(postId: string, data: {
+  late_post_id?: string | null;
+  platform: string;
+  impressions: number;
+  reach: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  clicks: number;
+  views: number;
+  engagement_rate: number;
+}): Promise<void> {
+  // Upsert: if metric for this post_id exists, update it
+  const { data: existing } = await supabase
+    .from('metrics')
+    .select('id')
+    .eq('post_id', postId)
+    .maybeSingle();
+
+  if (existing) {
+    await supabase
+      .from('metrics')
+      .update({
+        ...data,
+        synced_at: new Date().toISOString(),
+      })
+      .eq('id', existing.id);
+  } else {
+    await supabase
+      .from('metrics')
+      .insert({
+        post_id: postId,
+        ...data,
+        synced_at: new Date().toISOString(),
+      });
+  }
+}
+
+export async function getMetricsByPlan(planId: string): Promise<DbMetric[]> {
+  // Join metrics with posts to get metrics for all posts in a plan
+  const { data: posts } = await supabase
+    .from('posts')
+    .select('id')
+    .eq('plan_id', planId);
+
+  if (!posts || posts.length === 0) return [];
+
+  const postIds = posts.map(p => p.id);
+  const { data: metrics } = await supabase
+    .from('metrics')
+    .select('*')
+    .in('post_id', postIds)
+    .order('synced_at', { ascending: false });
+
+  return metrics || [];
+}
+
+export async function getMetricsBySession(sessionId: string): Promise<DbMetric[]> {
+  // Get all plans for session, then all posts, then all metrics
+  const { data: plans } = await supabase
+    .from('plans')
+    .select('id')
+    .eq('session_id', sessionId);
+
+  if (!plans || plans.length === 0) return [];
+
+  const planIds = plans.map(p => p.id);
+  const { data: posts } = await supabase
+    .from('posts')
+    .select('id')
+    .in('plan_id', planIds);
+
+  if (!posts || posts.length === 0) return [];
+
+  const postIds = posts.map(p => p.id);
+  const { data: metrics } = await supabase
+    .from('metrics')
+    .select('*')
+    .in('post_id', postIds)
+    .order('synced_at', { ascending: false });
+
+  return metrics || [];
+}

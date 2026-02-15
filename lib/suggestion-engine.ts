@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { supabase } from './supabase';
 import type { DbSession, DbPlan } from './db';
+import { getMetricsBySession } from './db';
 
 // ============================================================
 // TYPES
@@ -92,8 +93,30 @@ export async function generateAllSuggestions(): Promise<{
         continue;
       }
 
+      // Load metrics for this session
+      let metricsContext: string | null = null;
+      try {
+        const metrics = await getMetricsBySession(session.id);
+        if (metrics.length > 0) {
+          const metricsSummary = metrics.slice(0, 10).map(m => 
+            `- Post ${m.post_id.substring(0, 8)}: ${m.platform} — ${m.likes} likes, ${m.comments} comments, ${m.shares} shares, ${m.impressions} impressions, engagement ${m.engagement_rate}%`
+          ).join('\n');
+          
+          const totalLikes = metrics.reduce((s, m) => s + m.likes, 0);
+          const totalImpressions = metrics.reduce((s, m) => s + m.impressions, 0);
+          const avgEngagement = metrics.length > 0
+            ? (metrics.reduce((s, m) => s + m.engagement_rate, 0) / metrics.length).toFixed(2)
+            : '0';
+          
+          metricsContext = `=== POST PERFORMANCE METRICS ===\nTotal posts tracked: ${metrics.length}\nTotal likes: ${totalLikes} | Total impressions: ${totalImpressions} | Avg engagement: ${avgEngagement}%\n\nTop posts:\n${metricsSummary}`;
+        }
+      } catch {
+        // Non-fatal — suggestions work without metrics
+      }
+
       // Generate new suggestions
-      const suggestions = await generateSuggestionsForSession(sessionWithPlans);
+      const suggestions = await generateSuggestionsForSession(sessionWithPlans, metricsContext);
+
 
       // Save to DB
       for (const suggestion of suggestions) {
@@ -123,8 +146,8 @@ export async function generateAllSuggestions(): Promise<{
 // Generate suggestions for a single session
 // ============================================================
 
-async function generateSuggestionsForSession(session: SessionWithPlans): Promise<Suggestion[]> {
-  const context = buildSessionContext(session);
+async function generateSuggestionsForSession(session: SessionWithPlans, metricsContext: string | null = null): Promise<Suggestion[]> {
+  const context = buildSessionContext(session, metricsContext);
 
   // If no context worth analyzing, skip
   if (!context) return [];
@@ -151,8 +174,13 @@ Rules:
 - "follow_up" type: suggest after a completed plan to keep momentum
 - "new_plan" type: suggest a new strategy they haven't tried
 - "strategy_change" type: suggest pivoting based on what they've done
+- If POST PERFORMANCE METRICS are available, use them to make data-driven suggestions:
+  * Suggest MORE of what gets high engagement
+  * Suggest changing approach for low-performing content types
+  * Reference specific metrics in your description (e.g. "Sus posts educativos obtuvieron 3x más interacción")
 - All text in Spanish, professional but warm tone
-- Suggestions must be actionable and specific to THIS business`,
+- Suggestions must be actionable and specific to THIS business
+- Use EXACT current date provided — never guess dates`,
     messages: [
       {
         role: 'user',
@@ -213,7 +241,7 @@ Rules:
 // Build context string for Claude
 // ============================================================
 
-function buildSessionContext(session: SessionWithPlans): string | null {
+function buildSessionContext(session: SessionWithPlans, metricsContext: string | null = null): string | null {
   const info = session.business_info;
   if (!info || Object.keys(info).length === 0) return null;
 
@@ -246,6 +274,11 @@ function buildSessionContext(session: SessionWithPlans): string | null {
   const upcomingDates = getUpcoming14Days();
   if (upcomingDates) {
     parts.push(`=== UPCOMING DATES (Puerto Rico) ===\n${upcomingDates}`);
+  }
+
+  // Performance metrics (if available)
+  if (metricsContext) {
+    parts.push(metricsContext);
   }
 
   // Today's date
