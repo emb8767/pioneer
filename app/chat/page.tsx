@@ -78,7 +78,7 @@ function MessageContent({ content }: { content: string }) {
             href={match[5]}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-600 underline hover:text-blue-800 break-all"
+            className="text-primary underline hover:text-primary/80 break-all"
           >
             {match[4]}
           </a>
@@ -91,7 +91,7 @@ function MessageContent({ content }: { content: string }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-600 underline hover:text-blue-800 break-all"
+            className="text-primary underline hover:text-primary/80 break-all"
           >
             {url}
           </a>
@@ -160,8 +160,8 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
             }}
           />
           {(status === 'loading' || status === 'retrying') && (
-            <div className="flex items-center gap-2 text-gray-400 text-sm py-4">
-              <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+              <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
               {status === 'retrying' ? `Cargando imagen (intento ${retryCount.current + 1})...` : 'Cargando imagen...'}
             </div>
           )}
@@ -189,8 +189,8 @@ function ActionButtons({
   return (
     <div className="flex flex-wrap gap-2 mt-3">
       {loading ? (
-        <div className="flex items-center gap-2 px-4 py-2 text-sm text-blue-600">
-          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="flex items-center gap-2 px-4 py-2 text-sm text-primary">
+          <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
           Procesando...
         </div>
       ) : (
@@ -199,13 +199,13 @@ function ActionButtons({
 
           let styleClasses: string;
           if (disabled) {
-            styleClasses = 'opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50';
+            styleClasses = 'opacity-50 cursor-not-allowed border-border text-muted-foreground bg-muted';
           } else if (button.style === 'primary') {
-            styleClasses = 'border-blue-500 text-blue-700 bg-white hover:bg-blue-50 cursor-pointer';
+            styleClasses = 'border-primary text-primary bg-background hover:bg-accent cursor-pointer';
           } else if (button.style === 'ghost') {
-            styleClasses = 'border-dashed border-gray-300 text-gray-500 bg-white hover:bg-gray-50 cursor-pointer';
+            styleClasses = 'border-dashed border-border text-muted-foreground bg-background hover:bg-accent cursor-pointer';
           } else {
-            styleClasses = 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50 cursor-pointer';
+            styleClasses = 'border-border text-foreground bg-background hover:bg-accent cursor-pointer';
           }
 
           return (
@@ -587,17 +587,17 @@ export default function ChatPage() {
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
               {welcomeData?.businessName ? (
                 <>
-                  <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                  <h2 className="text-2xl font-bold text-foreground mb-2">
                     ¡Bienvenido de vuelta!
                   </h2>
-                  <p className="text-gray-500 mb-8 text-lg">
+                  <p className="text-muted-foreground mb-8 text-lg">
                     {welcomeData.businessName} — ¿qué hacemos hoy?
                   </p>
 
                   {/* Suggestion cards from suggestion engine */}
                   {suggestions.length > 0 && (
                     <div className="w-full max-w-lg mb-6">
-                      <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Sugerencias para su negocio</p>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Sugerencias para su negocio</p>
                       <div className="space-y-2">
                         {suggestions.map((sug) => (
                           <button
@@ -612,10 +612,10 @@ export default function ChatPage() {
                               setSuggestions(prev => prev.filter(s => s.id !== sug.id));
                               handleSuggestionClick(sug.title);
                             }}
-                            className="w-full px-4 py-3 rounded-xl border border-blue-200 bg-blue-50 text-left hover:bg-blue-100 hover:border-blue-300 transition-all duration-200 cursor-pointer"
+                            className="w-full px-4 py-3 rounded-xl border border-primary/30 bg-primary/5 text-left hover:bg-primary/10 hover:border-primary/50 transition-all duration-200 cursor-pointer"
                           >
-                            <span className="text-sm font-medium text-blue-800">{sug.title}</span>
-                            <span className="block text-xs text-blue-600 mt-0.5">{sug.description}</span>
+                            <span className="text-sm font-medium text-foreground">{sug.title}</span>
+                            <span className="block text-xs text-muted-foreground mt-0.5">{sug.description}</span>
                           </button>
                         ))}
                       </div>
@@ -643,10 +643,10 @@ export default function ChatPage() {
                 </>
               ) : (
                 <>
-                  <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                  <h2 className="text-2xl font-bold text-foreground mb-2">
                     ¡Bienvenido a Pioneer!
                   </h2>
-                  <p className="text-gray-500 mb-8 text-lg">
+                  <p className="text-muted-foreground mb-8 text-lg">
                     Su asistente de marketing digital para hacer crecer su negocio en Puerto Rico.
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
@@ -687,8 +687,8 @@ export default function ChatPage() {
                     <div
                       className={`max-w-[80%] rounded-2xl px-4 py-3 ${
                         message.role === 'user'
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-white border border-gray-200 text-gray-800'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-card border border-border text-card-foreground'
                       }`}
                     >
                       <MessageContent content={text} />
@@ -719,7 +719,7 @@ export default function ChatPage() {
           {Array.from(actionResults.entries()).map(([resultId, result]) => (
             <div key={resultId}>
               <div className="flex justify-start">
-                <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white border border-gray-200 text-gray-800">
+                <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-card border border-border text-card-foreground">
                   <MessageContent content={result.content} />
                 </div>
               </div>
@@ -752,11 +752,11 @@ export default function ChatPage() {
           {/* Loading indicator */}
           {status === 'submitted' && (
             <div className="flex justify-start">
-              <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3">
+              <div className="bg-card border border-border rounded-2xl px-4 py-3">
                 <div className="flex space-x-2">
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.1s]" />
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.2s]" />
+                  <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
+                  <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.1s]" />
+                  <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.2s]" />
                 </div>
               </div>
             </div>
@@ -776,7 +776,7 @@ export default function ChatPage() {
       </div>
 
       {/* Input */}
-      <div className="border-t bg-white px-4 py-4">
+      <div className="border-t border-border bg-background px-4 py-4">
         <div className="max-w-3xl mx-auto flex gap-3">
           <textarea
             ref={inputRef}
@@ -784,14 +784,14 @@ export default function ChatPage() {
             onChange={(e) => setChatInput(e.target.value)}
             onKeyDown={handleKeyPress}
             placeholder="Escriba su mensaje..."
-            className="flex-1 resize-none rounded-xl border border-gray-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="flex-1 resize-none rounded-xl border border-input bg-background text-foreground px-4 py-3 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-muted-foreground"
             rows={1}
             disabled={isLoading}
           />
           <button
             onClick={handleSend}
             disabled={isLoading || !chatInput.trim()}
-            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            className="px-6 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors"
           >
             Enviar
           </button>
@@ -815,7 +815,7 @@ function WelcomeSuggestion({
   return (
     <button
       onClick={() => onClick(text)}
-      className="px-4 py-3 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm text-left hover:bg-gray-50 hover:border-gray-300 transition-all duration-200 cursor-pointer"
+      className="px-4 py-3 rounded-xl border border-border bg-card text-card-foreground text-sm text-left hover:bg-accent hover:border-border transition-all duration-200 cursor-pointer"
     >
       {text}
     </button>
