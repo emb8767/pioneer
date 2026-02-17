@@ -55,6 +55,10 @@ interface FormData {
   description: string
 }
 
+const inputClasses = "w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-muted-foreground"
+const labelClasses = "block text-sm font-medium text-foreground mb-1"
+const selectClasses = "w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+
 export default function OnboardingPage() {
   const router = useRouter()
   const [status, setStatus] = useState<'loading' | 'ready' | 'submitting' | 'error'>('loading')
@@ -143,9 +147,9 @@ export default function OnboardingPage() {
 
   if (status === 'loading') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white flex items-center justify-center">
-        <div className="flex items-center gap-3 text-gray-500">
-          <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
           Cargando...
         </div>
       </div>
@@ -153,39 +157,44 @@ export default function OnboardingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white py-8 px-4">
+    <div className="min-h-screen bg-background py-6 px-4 sm:py-8">
       <div className="w-full max-w-2xl mx-auto">
         {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">
-            Pioneer<span className="text-blue-600">Agent</span>
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="flex items-center justify-center gap-2 mb-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground text-lg font-bold">
+              P
+            </div>
+          </div>
+          <h1 className="text-2xl font-bold text-foreground">
+            Pioneer<span className="text-primary">Agent</span>
           </h1>
-          <p className="text-gray-500 mt-2">
+          <p className="text-muted-foreground mt-1 text-sm">
             Cuéntenos sobre su negocio para crear su estrategia de marketing
           </p>
         </div>
 
         {/* Progress indicator */}
-        <div className="flex items-center justify-center gap-2 mb-8">
+        <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-medium">1</div>
-            <span className="text-sm font-medium text-blue-600">Datos del negocio</span>
+            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">1</div>
+            <span className="text-sm font-medium text-primary">Datos del negocio</span>
           </div>
-          <div className="w-8 h-px bg-gray-300" />
+          <div className="w-8 h-px bg-border" />
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center text-sm font-medium">2</div>
-            <span className="text-sm text-gray-400">Chat con Pioneer</span>
+            <div className="w-8 h-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium">2</div>
+            <span className="text-sm text-muted-foreground">Chat con Pioneer</span>
           </div>
         </div>
 
         {/* Form card */}
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8">
-          <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="bg-card rounded-2xl shadow-lg border border-border p-5 sm:p-8">
+          <form onSubmit={handleSubmit} className="space-y-5 sm:space-y-6">
 
             {/* Business Name */}
             <div>
-              <label htmlFor="businessName" className="block text-sm font-medium text-gray-700 mb-1">
-                Nombre del negocio <span className="text-red-500">*</span>
+              <label htmlFor="businessName" className={labelClasses}>
+                Nombre del negocio <span className="text-red-500 dark:text-red-400">*</span>
               </label>
               <input
                 id="businessName"
@@ -193,20 +202,20 @@ export default function OnboardingPage() {
                 value={form.businessName}
                 onChange={(e) => updateField('businessName', e.target.value)}
                 placeholder="Ej: Barbería Don Pedro"
-                className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400"
+                className={inputClasses}
               />
             </div>
 
             {/* Business Type */}
             <div>
-              <label htmlFor="businessType" className="block text-sm font-medium text-gray-700 mb-1">
-                Tipo de negocio <span className="text-red-500">*</span>
+              <label htmlFor="businessType" className={labelClasses}>
+                Tipo de negocio <span className="text-red-500 dark:text-red-400">*</span>
               </label>
               <select
                 id="businessType"
                 value={form.businessType}
                 onChange={(e) => updateField('businessType', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+                className={selectClasses}
               >
                 <option value="">Seleccione...</option>
                 {BUSINESS_TYPES.map((type) => (
@@ -219,21 +228,21 @@ export default function OnboardingPage() {
                   value={form.customType}
                   onChange={(e) => updateField('customType', e.target.value)}
                   placeholder="Describa su tipo de negocio"
-                  className="w-full mt-2 px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400"
+                  className={`${inputClasses} mt-2`}
                 />
               )}
             </div>
 
             {/* Location */}
             <div>
-              <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">
-                Ubicación (pueblo) <span className="text-red-500">*</span>
+              <label htmlFor="location" className={labelClasses}>
+                Ubicación (pueblo) <span className="text-red-500 dark:text-red-400">*</span>
               </label>
               <select
                 id="location"
                 value={form.location}
                 onChange={(e) => updateField('location', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+                className={selectClasses}
               >
                 <option value="">Seleccione su pueblo...</option>
                 {PR_TOWNS.map((town) => (
@@ -245,7 +254,7 @@ export default function OnboardingPage() {
             {/* Two columns: Phone + Hours */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="phone" className={labelClasses}>
                   Teléfono
                 </label>
                 <input
@@ -254,11 +263,11 @@ export default function OnboardingPage() {
                   value={form.phone}
                   onChange={(e) => updateField('phone', e.target.value)}
                   placeholder="787-555-1234"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400"
+                  className={inputClasses}
                 />
               </div>
               <div>
-                <label htmlFor="hours" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="hours" className={labelClasses}>
                   Horario
                 </label>
                 <input
@@ -267,7 +276,7 @@ export default function OnboardingPage() {
                   value={form.hours}
                   onChange={(e) => updateField('hours', e.target.value)}
                   placeholder="L-V 8am-5pm, S 9am-1pm"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400"
+                  className={inputClasses}
                 />
               </div>
             </div>
@@ -275,7 +284,7 @@ export default function OnboardingPage() {
             {/* Two columns: Email + Years */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="email" className={labelClasses}>
                   Email de contacto
                 </label>
                 <input
@@ -284,11 +293,11 @@ export default function OnboardingPage() {
                   value={form.email}
                   onChange={(e) => updateField('email', e.target.value)}
                   placeholder="negocio@email.com"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400"
+                  className={inputClasses}
                 />
               </div>
               <div>
-                <label htmlFor="yearsInBusiness" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="yearsInBusiness" className={labelClasses}>
                   Años del negocio
                 </label>
                 <input
@@ -297,17 +306,17 @@ export default function OnboardingPage() {
                   value={form.yearsInBusiness}
                   onChange={(e) => updateField('yearsInBusiness', e.target.value)}
                   placeholder="Ej: 5 años"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400"
+                  className={inputClasses}
                 />
               </div>
             </div>
 
             {/* Description */}
             <div>
-              <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="description" className={labelClasses}>
                 Describa brevemente su negocio
               </label>
-              <p className="text-xs text-gray-400 mb-2">
+              <p className="text-xs text-muted-foreground mb-2">
                 ¿Qué ofrece? ¿Qué lo diferencia? ¿Quiénes son sus clientes?
               </p>
               <textarea
@@ -316,13 +325,13 @@ export default function OnboardingPage() {
                 onChange={(e) => updateField('description', e.target.value)}
                 placeholder="Ej: Somos una barbería familiar con 15 años de experiencia. Nos especializamos en cortes clásicos y modernos. Nuestros clientes son principalmente hombres de 18-45 años del área oeste."
                 rows={4}
-                className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-400 resize-none"
+                className={`${inputClasses} resize-none`}
               />
             </div>
 
             {/* Error message */}
             {errorMsg && (
-              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-700 text-sm">
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-400 text-sm">
                 {errorMsg}
               </div>
             )}
@@ -331,11 +340,11 @@ export default function OnboardingPage() {
             <button
               type="submit"
               disabled={status === 'submitting'}
-              className="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-lg"
+              className="w-full px-4 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors text-lg"
             >
               {status === 'submitting' ? (
                 <span className="flex items-center justify-center gap-2">
-                  <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
                   Guardando...
                 </span>
               ) : (
@@ -345,7 +354,7 @@ export default function OnboardingPage() {
           </form>
         </div>
 
-        <p className="text-center text-gray-400 text-xs mt-6">
+        <p className="text-center text-muted-foreground text-xs mt-6">
           Esta información se usa para personalizar su estrategia de marketing.
           Puede editarla después.
         </p>
