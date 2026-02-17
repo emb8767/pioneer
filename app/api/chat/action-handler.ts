@@ -234,7 +234,10 @@ async function handleNextPost(params: ActionRequest['params']): Promise<ActionRe
         const bizInfo = Object.entries(session.business_info)
           .map(([k, v]) => `${k}: ${v}`)
           .join('\n');
-        enrichedContext = `=== DATOS DEL NEGOCIO (base de datos) ===\n${bizInfo}\n\n${enrichedContext}`;
+        // Import contact info helper
+        const { getContactInfo } = await import('@/lib/system-prompt');
+        const contactRules = getContactInfo(session.business_info as Record<string, unknown>);
+        enrichedContext = `=== DATOS DEL NEGOCIO (base de datos) ===\n${bizInfo}\n\n=== REGLAS DE CONTACTO ===\n${contactRules}\n\n${enrichedContext}`;
         console.log(`[Pioneer Action] Business context inyectado desde DB (${bizInfo.length} chars)`);
       }
     } catch (dbErr) {
@@ -686,17 +689,22 @@ REGLAS DE CALIDAD — OBLIGATORIO:
 - Máximo 4-6 líneas de texto real + CTA + hashtags.
 - NUNCA listes más de 2-3 items.
 - Fórmula: Hook (1 línea) + Beneficio/Info (2-3 líneas) + CTA con contacto (1-2 líneas) + hashtags.
-- Incluye datos de contacto REALES si están en el contexto.
-- NUNCA inventes testimonios, marcas, precios, o datos no proporcionados.
-- NUNCA uses placeholders como [dirección] o [teléfono].
 - Escribe el post LISTO PARA PUBLICAR — no incluyas explicación ni título.
 - NO incluyas "Post #N" ni "---" ni nada que no sea el post.
 
 ⚠️ REGLA CRÍTICA — TÍTULO DEL POST:
 - El título del post define el TEMA EXACTO. Respétalo al 100%.
 - Si el título dice "Día de la Mujer", escribe sobre el Día de la Mujer. NUNCA lo cambies a "Día de la Madre" ni otro evento.
-- Si el título dice "Recordatorio", escribe un recordatorio, no un post nuevo.
-- NUNCA sustituyas un evento/fecha por otro diferente.`,
+- NUNCA sustituyas un evento/fecha por otro diferente.
+
+⚠️ REGLA CRÍTICA — DATOS DE CONTACTO:
+- SOLO usa datos de contacto que aparecen en "REGLAS DE CONTACTO" del contexto.
+- Si dice "Teléfono: NO DISPONIBLE" → NO menciones teléfono. NO inventes número. NO escribas "787-[tu número]" ni ningún placeholder.
+- Si dice "Email: NO USAR en posts" → NO incluyas ese email en el post. Es el email personal del dueño.
+- Si dice "Email: NO DISPONIBLE" → NO menciones email.
+- Si NO hay teléfono NI email de negocio disponible, usa solo ubicación y nombre del negocio como contacto.
+- NUNCA inventes testimonios, marcas, precios, o datos no proporcionados.
+- NUNCA uses placeholders como [dirección], [teléfono], [tu número].`,
     messages: [{
       role: 'user',
       content: `Contexto del negocio y plan:\n${input.conversationContext}\n\nGenera el Post #${input.postNumber} de ${input.totalPosts}: "${input.postTitle}"\n\nEscribe SOLO el texto del post, listo para publicar.`,
