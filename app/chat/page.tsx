@@ -577,13 +577,7 @@ export default function ChatPage() {
   // RENDER
   // ════════════════════════════════════════
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-800">Pioneer Agent</h1>
-        <p className="text-sm text-gray-500">Su asistente de marketing digital</p>
-      </header>
-
+    <div className="flex flex-col h-full bg-background">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
