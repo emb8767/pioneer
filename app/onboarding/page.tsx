@@ -1,8 +1,8 @@
-// app/onboarding/page.tsx — Business onboarding form
+// app/onboarding/page.tsx — Business onboarding form (create + edit)
 //
-// Captures basic business info WITHOUT using Claude tokens.
-// After submission, saves to sessions table with user_id.
-// Pioneer chat then skips basic interview and asks deeper questions only.
+// If user has existing session → loads data for editing
+// If new user → empty form for onboarding
+// No Claude tokens used.
 
 'use client'
 
@@ -63,6 +63,8 @@ export default function OnboardingPage() {
   const router = useRouter()
   const [status, setStatus] = useState<'loading' | 'ready' | 'submitting' | 'error'>('loading')
   const [errorMsg, setErrorMsg] = useState('')
+  const [isEditing, setIsEditing] = useState(false)
+  const [saved, setSaved] = useState(false)
   const [form, setForm] = useState<FormData>({
     businessName: '',
     businessType: '',
@@ -75,29 +77,61 @@ export default function OnboardingPage() {
     description: '',
   })
 
-  // Load user email from auth session
+  // Load user + existing business data
   useEffect(() => {
-    async function loadUser() {
+    async function loadData() {
       const supabase = createClient()
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         router.push('/login')
         return
       }
-      setForm(prev => ({ ...prev, email: user.email || '' }))
+
+      // Try to load existing business info
+      try {
+        const res = await fetch('/api/onboarding')
+        const data = await res.json()
+
+        if (data.exists && data.businessInfo) {
+          const info = data.businessInfo
+          // Check if businessType matches a predefined option
+          const matchedType = BUSINESS_TYPES.find(t => t === info.business_type)
+
+          setForm({
+            businessName: data.businessName || '',
+            businessType: matchedType || (info.business_type ? 'Otro' : ''),
+            customType: matchedType ? '' : (info.business_type || ''),
+            location: info.location || '',
+            phone: info.phone || '',
+            hours: info.hours || '',
+            email: data.email || user.email || '',
+            yearsInBusiness: info.years_in_business || '',
+            description: info.description || '',
+          })
+          setIsEditing(true)
+        } else {
+          setForm(prev => ({ ...prev, email: user.email || '' }))
+        }
+      } catch {
+        // If fetch fails, continue with empty form
+        setForm(prev => ({ ...prev, email: user.email || '' }))
+      }
+
       setStatus('ready')
     }
-    loadUser()
+    loadData()
   }, [router])
 
   function updateField(field: keyof FormData, value: string) {
     setForm(prev => ({ ...prev, [field]: value }))
+    setSaved(false)
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setStatus('submitting')
     setErrorMsg('')
+    setSaved(false)
 
     // Validation
     if (!form.businessName.trim()) {
@@ -137,8 +171,14 @@ export default function OnboardingPage() {
         throw new Error(data.error || 'Error al guardar los datos')
       }
 
-      // Success — redirect to chat
-      router.push('/chat')
+      if (isEditing) {
+        // Show saved confirmation, stay on page
+        setSaved(true)
+        setStatus('ready')
+      } else {
+        // New user — redirect to chat
+        router.push('/chat')
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Error inesperado')
       setStatus('ready')
@@ -167,25 +207,47 @@ export default function OnboardingPage() {
             </div>
           </div>
           <h1 className="text-2xl font-bold text-foreground">
-            Pioneer<span className="text-primary">Agent</span>
+            {isEditing ? 'Perfil del negocio' : (
+              <>Pioneer<span className="text-primary">Agent</span></>
+            )}
           </h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Cuéntenos sobre su negocio para crear su estrategia de marketing
+            {isEditing
+              ? 'Actualice la información de su negocio'
+              : 'Cuéntenos sobre su negocio para crear su estrategia de marketing'
+            }
           </p>
         </div>
 
-        {/* Progress indicator */}
-        <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">1</div>
-            <span className="text-sm font-medium text-primary">Datos del negocio</span>
+        {/* Progress indicator — only for new users */}
+        {!isEditing && (
+          <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">1</div>
+              <span className="text-sm font-medium text-primary">Datos del negocio</span>
+            </div>
+            <div className="w-8 h-px bg-border" />
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium">2</div>
+              <span className="text-sm text-muted-foreground">Chat con Pioneer</span>
+            </div>
           </div>
-          <div className="w-8 h-px bg-border" />
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium">2</div>
-            <span className="text-sm text-muted-foreground">Chat con Pioneer</span>
+        )}
+
+        {/* Back to chat — only when editing */}
+        {isEditing && (
+          <div className="mb-4">
+            <button
+              onClick={() => router.push('/chat')}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Volver al chat
+            </button>
           </div>
-        </div>
+        )}
 
         {/* Form card */}
         <div className="bg-card rounded-2xl shadow-lg border border-border p-5 sm:p-8">
@@ -336,6 +398,16 @@ export default function OnboardingPage() {
               </div>
             )}
 
+            {/* Success message */}
+            {saved && (
+              <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl px-4 py-3 text-green-700 dark:text-green-400 text-sm flex items-center gap-2">
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Cambios guardados exitosamente.
+              </div>
+            )}
+
             {/* Submit */}
             <button
               type="submit"
@@ -347,6 +419,8 @@ export default function OnboardingPage() {
                   <span className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
                   Guardando...
                 </span>
+              ) : isEditing ? (
+                'Guardar cambios'
               ) : (
                 'Continuar al chat →'
               )}
@@ -355,8 +429,10 @@ export default function OnboardingPage() {
         </div>
 
         <p className="text-center text-muted-foreground text-xs mt-6">
-          Esta información se usa para personalizar su estrategia de marketing.
-          Puede editarla después.
+          {isEditing
+            ? 'Los cambios se reflejarán en su próxima estrategia de marketing.'
+            : 'Esta información se usa para personalizar su estrategia de marketing. Puede editarla después.'
+          }
         </p>
       </div>
     </div>
