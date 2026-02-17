@@ -320,51 +320,54 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, actionResults]);
 
-  // --- Check saved session on mount ---
+  // --- Check session on mount (auth-first, localStorage fallback) ---
   useEffect(() => {
     if (sessionChecked) return;
     setSessionChecked(true);
 
-    const savedSessionId = localStorage.getItem('pioneer_session_id');
-    if (savedSessionId) {
-      setSessionId(savedSessionId);
-      sessionIdRef.current = savedSessionId;
-      // Verify session exists in DB
-      fetch(`/api/chat/session?id=${savedSessionId}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.exists) {
-            // Session exists — keep it regardless of interview status
-            if (data.hasBusinessInfo) {
-              console.log(`[Pioneer] Sesión restaurada con negocio: ${data.businessName}`);
-              setWelcomeData({
-                businessName: data.businessName,
-                plan: data.plan || null,
-              });
-              // Fetch pending suggestions
-              fetch(`/api/suggestions?sessionId=${savedSessionId}`)
-                .then(res => res.json())
-                .then(sugData => {
-                  if (sugData.suggestions?.length > 0) {
-                    setSuggestions(sugData.suggestions);
-                    console.log(`[Pioneer] ${sugData.suggestions.length} sugerencias cargadas`);
-                  }
-                })
-                .catch(() => { /* non-fatal */ });
-            } else {
-              console.log(`[Pioneer] Sesión restaurada (entrevista en progreso): ${data.sessionId}`);
-            }
-          } else {
-            // Session not in DB — clean up
-            localStorage.removeItem('pioneer_session_id');
-            setSessionId(null);
-            sessionIdRef.current = null;
-          }
-        })
-        .catch(() => {
-          // Network error — keep sessionId, don't invalidate
-        });
-    }
+    // First: try to find session by authenticated user (no id param)
+    fetch('/api/chat/session')
+      .then(res => res.json())
+      .then(data => {
+        if (data.needsOnboarding) {
+          // User has no business info → redirect to onboarding
+          window.location.href = '/onboarding';
+          return;
+        }
+
+        if (data.exists && data.sessionId) {
+          // Found session by user_id → use it
+          setSessionId(data.sessionId);
+          sessionIdRef.current = data.sessionId;
+          localStorage.setItem('pioneer_session_id', data.sessionId);
+          console.log(`[Pioneer] Sesión encontrada por auth: ${data.businessName}`);
+          setWelcomeData({
+            businessName: data.businessName,
+            plan: data.plan || null,
+          });
+          // Fetch pending suggestions
+          fetch(`/api/suggestions?sessionId=${data.sessionId}`)
+            .then(res => res.json())
+            .then(sugData => {
+              if (sugData.suggestions?.length > 0) {
+                setSuggestions(sugData.suggestions);
+                console.log(`[Pioneer] ${sugData.suggestions.length} sugerencias cargadas`);
+              }
+            })
+            .catch(() => { /* non-fatal */ });
+        } else {
+          // No session found at all — redirect to onboarding
+          window.location.href = '/onboarding';
+        }
+      })
+      .catch(() => {
+        // Network error — try localStorage fallback
+        const savedSessionId = localStorage.getItem('pioneer_session_id');
+        if (savedSessionId) {
+          setSessionId(savedSessionId);
+          sessionIdRef.current = savedSessionId;
+        }
+      });
   }, [sessionChecked]);
 
   // --- Detect ?pending_connection in URL ---
