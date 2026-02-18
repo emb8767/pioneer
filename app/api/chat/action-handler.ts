@@ -85,6 +85,8 @@ export async function handleAction(req: ActionRequest): Promise<ActionResponse> 
       return handleApproveAndPublish({ ...req.params, imageUrls: [] });
     case 'regenerate_image':
       return handleGenerateImage(req.params);
+    case 'finish_session':
+      return handleFinishSession(req.params);
     default:
       return { success: false, message: `Acción no reconocida: ${req.action}`, error: `unknown_action: ${req.action}` };
   }
@@ -557,7 +559,7 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
       buttons: planComplete
         ? [
             { id: 'more_posts', label: '➕ Crear más posts', type: 'option', style: 'secondary', chatMessage: 'Quiero crear más posts adicionales' },
-            { id: 'done', label: '✅ Listo, terminamos', type: 'option', style: 'primary', chatMessage: 'Listo, terminamos por ahora' },
+            { id: 'done', label: '✅ Listo, terminamos', type: 'action', style: 'primary', action: 'finish_session' },
           ]
         : [
             { id: 'next_post', label: '▶️ Siguiente post', type: 'action', style: 'primary', action: 'next_post' },
@@ -643,8 +645,14 @@ Rules for posts:
 - Extract each post in order
 - post_type should match the theme
 - details should describe what the post is about
-- target_date: If the post is tied to a specific calendar date (e.g., "Día de la Mujer" = March 8), set the target date as YYYY-MM-DD. The post should be published ON or BEFORE this date. If the post has no specific date, set target_date to null.
-- Examples: "Campaña Día de la Mujer (8 de marzo)" → target_date: "2026-03-08". "Lanzamiento del negocio" → target_date: null`,
+
+⚠️ CRITICAL — target_date rules:
+- If the PLAN is about a specific calendar event (e.g., "Día de la Mujer", "San Valentín", "Navidad"), then the LAST post MUST have target_date set to that event's date.
+- For plans about seasonal events, at MINIMUM the last post should have target_date = the event date. Earlier posts can also have target_date if they build up to the event.
+- Common dates: Día de la Mujer = 2026-03-08, San Valentín = 2026-02-14, Día de las Madres = 2026-05-10, Navidad = 2026-12-25
+- If the post is tied to a specific calendar date, set target_date as YYYY-MM-DD. The post will be published ON or BEFORE this date.
+- If the post has no specific date tie, set target_date to null.
+- Examples: Plan "Celebrando el Día de la Mujer" with 5 posts → last post target_date: "2026-03-08", others null. Plan "Lanzamiento del negocio" → all target_date: null.`,
     messages: [{
       role: 'user',
       content: planText,
@@ -662,6 +670,17 @@ Rules for posts:
 
   // Validación básica
   if (!parsed.posts || parsed.posts.length === 0) throw new Error('Plan sin posts');
+
+  // Deterministic fallback: if plan name mentions a known date but no posts have target_date,
+  // assign the date to the last post so it gets scheduled on or before the event
+  const hasAnyTargetDate = parsed.posts.some(p => p.target_date);
+  if (!hasAnyTargetDate) {
+    const seasonalDate = detectSeasonalDate(parsed.plan_name + ' ' + parsed.description);
+    if (seasonalDate) {
+      parsed.posts[parsed.posts.length - 1].target_date = seasonalDate;
+      console.log(`[Pioneer] Fallback: assigned target_date ${seasonalDate} to last post "${parsed.posts[parsed.posts.length - 1].title}"`);
+    }
+  }
 
   return parsed;
 }
@@ -867,6 +886,60 @@ function formatTime12h(time24: string): string {
   const period = hour >= 12 ? 'PM' : 'AM';
   const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
   return `${hour12}:${minute} ${period}`;
+}
+
+// ═══════════════════════════════════════════════════════
+// FINISH SESSION — Deterministic goodbye (no Claude call)
+// ═══════════════════════════════════════════════════════
+
+async function handleFinishSession(params: ActionRequest['params']): Promise<ActionResponse> {
+  // Get business name for personalized goodbye
+  let businessName = 'su negocio';
+  if (params.sessionId) {
+    try {
+      const session = await getSession(params.sessionId);
+      if (session?.business_name) {
+        businessName = session.business_name;
+      }
+    } catch { /* use default */ }
+  }
+
+  return {
+    success: true,
+    message: `¡Perfecto! Quedamos hasta aquí por ahora.\n\nSus posts se publicarán automáticamente en las fechas programadas. Cuando quiera crear más contenido o revisar resultados, aquí estaré para ayudarle.\n\n¡Mucho éxito con ${businessName}! 🎉`,
+    buttons: [
+      { id: 'new_plan', label: '➕ Crear nuevo plan', type: 'option', style: 'secondary', chatMessage: 'Crear un nuevo plan de marketing' },
+    ],
+  };
+}
+
+// --- Detect seasonal date from plan text (deterministic fallback) ---
+function detectSeasonalDate(text: string): string | null {
+  const lower = text.toLowerCase();
+  const currentYear = new Date().getFullYear();
+
+  const patterns: Array<{ keywords: string[]; date: string }> = [
+    { keywords: ['día de la mujer', 'dia de la mujer', '8 de marzo', 'women'], date: `${currentYear}-03-08` },
+    { keywords: ['san valentín', 'san valentin', 'valentines', '14 de febrero'], date: `${currentYear}-02-14` },
+    { keywords: ['día de las madres', 'dia de las madres', 'mother'], date: `${currentYear}-05-10` },
+    { keywords: ['día del padre', 'dia del padre', 'father'], date: `${currentYear}-06-15` },
+    { keywords: ['navidad', 'christmas', '25 de diciembre'], date: `${currentYear}-12-25` },
+    { keywords: ['año nuevo', 'new year'], date: `${currentYear + 1}-01-01` },
+    { keywords: ['black friday'], date: `${currentYear}-11-28` },
+    { keywords: ['thanksgiving', 'acción de gracias'], date: `${currentYear}-11-27` },
+    { keywords: ['halloween', '31 de octubre'], date: `${currentYear}-10-31` },
+    { keywords: ['semana santa', 'viernes santo'], date: `${currentYear}-04-03` },
+    { keywords: ['descubrimiento de puerto rico', '19 de noviembre'], date: `${currentYear}-11-19` },
+    { keywords: ['tres reyes', 'reyes magos', '6 de enero'], date: `${currentYear}-01-06` },
+  ];
+
+  for (const { keywords, date } of patterns) {
+    if (keywords.some(kw => lower.includes(kw))) {
+      return date;
+    }
+  }
+
+  return null;
 }
 
 // --- Calculate optimal queue slots based on post count ---

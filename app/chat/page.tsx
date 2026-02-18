@@ -230,12 +230,12 @@ function parsePostContent(text: string): ParsedPost | null {
 function PostPreviewCard({ post }: { post: ParsedPost }) {
   // Extract hashtags from body
   const lines = post.body.split('\n');
-  const hashtagLine = lines.find(l => (l.match(/#\w/g) || []).length >= 2);
+  const hashtagLine = lines.find(l => (l.match(/#[\p{L}\p{N}]/gu) || []).length >= 2);
   const bodyWithoutHashtags = hashtagLine
     ? lines.filter(l => l !== hashtagLine).join('\n').trim()
     : post.body;
   const hashtags = hashtagLine
-    ? hashtagLine.match(/#\w+/g) || []
+    ? hashtagLine.match(/#[\p{L}\p{N}]+/gu) || []
     : [];
 
   return (
