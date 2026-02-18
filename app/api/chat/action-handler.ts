@@ -1026,8 +1026,17 @@ function formatScheduleEntry(date: Date): PostScheduleEntry {
   const period = hours >= 12 ? 'PM' : 'AM';
   const hour12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
 
+  // Build ISO string with AST offset (-04:00) instead of using toISOString()
+  // which converts to UTC and loses the intended PR time
+  const year = date.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const h = date.getHours().toString().padStart(2, '0');
+  const m = date.getMinutes().toString().padStart(2, '0');
+  const isoWithOffset = `${year}-${month}-${day}T${h}:${m}:00-04:00`;
+
   return {
-    date: date.toISOString(),
+    date: isoWithOffset,
     displayDate: `${dayName} ${dayNum} de ${monthName} a las ${hour12}:${minutes} ${period}`,
   };
 }
