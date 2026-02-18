@@ -243,8 +243,8 @@ export async function incrementPostsPublished(planId: string): Promise<DbPlan> {
     return data;
   }
 
-  // Update status to in_progress if still pending
-  if (plan.status === 'pending' || plan.status === 'approved') {
+  // Update status to in_progress if still in approval stage
+  if (plan.status === 'pending_approval' || plan.status === 'approved') {
     const { data, error } = await supabase
       .from('plans')
       .update({ status: 'in_progress' })
