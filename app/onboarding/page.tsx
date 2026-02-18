@@ -1,8 +1,5 @@
 // app/onboarding/page.tsx — Business onboarding form (create + edit)
-//
-// If user has existing session → loads data for editing
-// If new user → empty form for onboarding
-// No Claude tokens used.
+// Pioneer UI v2 — teal/navy palette
 
 'use client'
 
@@ -55,9 +52,9 @@ interface FormData {
   description: string
 }
 
-const inputClasses = "w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-muted-foreground"
-const labelClasses = "block text-sm font-medium text-foreground mb-1"
-const selectClasses = "w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+const inputClasses = "w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--pioneer-teal)]/30 focus:border-[var(--pioneer-teal)]/50 placeholder:text-muted-foreground transition-all"
+const labelClasses = "block text-sm font-medium text-foreground mb-1.5"
+const selectClasses = "w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--pioneer-teal)]/30 focus:border-[var(--pioneer-teal)]/50 transition-all"
 
 export default function OnboardingPage() {
   const router = useRouter()
@@ -77,7 +74,6 @@ export default function OnboardingPage() {
     description: '',
   })
 
-  // Load user + existing business data
   useEffect(() => {
     async function loadData() {
       const supabase = createClient()
@@ -87,14 +83,12 @@ export default function OnboardingPage() {
         return
       }
 
-      // Try to load existing business info
       try {
         const res = await fetch('/api/onboarding')
         const data = await res.json()
 
         if (data.exists && data.businessInfo) {
           const info = data.businessInfo
-          // Check if businessType matches a predefined option
           const matchedType = BUSINESS_TYPES.find(t => t === info.business_type)
 
           setForm({
@@ -113,7 +107,6 @@ export default function OnboardingPage() {
           setForm(prev => ({ ...prev, email: user.email || '' }))
         }
       } catch {
-        // If fetch fails, continue with empty form
         setForm(prev => ({ ...prev, email: user.email || '' }))
       }
 
@@ -133,7 +126,6 @@ export default function OnboardingPage() {
     setErrorMsg('')
     setSaved(false)
 
-    // Validation
     if (!form.businessName.trim()) {
       setErrorMsg('El nombre del negocio es requerido.')
       setStatus('ready')
@@ -172,11 +164,9 @@ export default function OnboardingPage() {
       }
 
       if (isEditing) {
-        // Show saved confirmation, stay on page
         setSaved(true)
         setStatus('ready')
       } else {
-        // New user — redirect to chat
         router.push('/chat')
       }
     } catch (err) {
@@ -189,7 +179,7 @@ export default function OnboardingPage() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex items-center gap-3 text-muted-foreground">
-          <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <div className="w-5 h-5 border-2 border-[var(--pioneer-teal)] border-t-transparent rounded-full animate-spin" />
           Cargando...
         </div>
       </div>
@@ -198,20 +188,26 @@ export default function OnboardingPage() {
 
   return (
     <div className="min-h-screen bg-background py-6 px-4 sm:py-8">
-      <div className="w-full max-w-2xl mx-auto">
+      {/* Background accents */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-[var(--pioneer-teal)]/5 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-[var(--pioneer-teal)]/5 rounded-full blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-2xl mx-auto relative z-10">
         {/* Header */}
         <div className="text-center mb-6 sm:mb-8">
-          <div className="flex items-center justify-center gap-2 mb-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground text-lg font-bold">
+          <div className="flex items-center justify-center mb-4">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl pioneer-gradient text-white text-2xl font-bold shadow-lg">
               P
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-foreground">
+          <h1 className="text-2xl font-bold text-foreground tracking-tight">
             {isEditing ? 'Perfil del negocio' : (
-              <>Pioneer<span className="text-primary">Agent</span></>
+              <>Pioneer<span className="text-[var(--pioneer-teal)]">Agent</span></>
             )}
           </h1>
-          <p className="text-muted-foreground mt-1 text-sm">
+          <p className="text-muted-foreground mt-1.5 text-sm">
             {isEditing
               ? 'Actualice la información de su negocio'
               : 'Cuéntenos sobre su negocio para crear su estrategia de marketing'
@@ -219,12 +215,12 @@ export default function OnboardingPage() {
           </p>
         </div>
 
-        {/* Progress indicator — only for new users */}
+        {/* Progress — new users only */}
         {!isEditing && (
-          <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
+          <div className="flex items-center justify-center gap-3 mb-6 sm:mb-8">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">1</div>
-              <span className="text-sm font-medium text-primary">Datos del negocio</span>
+              <div className="w-8 h-8 rounded-full pioneer-gradient text-white flex items-center justify-center text-sm font-bold shadow-sm">1</div>
+              <span className="text-sm font-medium text-foreground">Datos del negocio</span>
             </div>
             <div className="w-8 h-px bg-border" />
             <div className="flex items-center gap-2">
@@ -234,12 +230,12 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {/* Back to chat — only when editing */}
+        {/* Back to chat */}
         {isEditing && (
           <div className="mb-4">
             <button
               onClick={() => router.push('/chat')}
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+              className="text-sm text-muted-foreground hover:text-[var(--pioneer-teal)] transition-colors flex items-center gap-1 cursor-pointer"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -316,9 +312,7 @@ export default function OnboardingPage() {
             {/* Two columns: Phone + Hours */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="phone" className={labelClasses}>
-                  Teléfono
-                </label>
+                <label htmlFor="phone" className={labelClasses}>Teléfono</label>
                 <input
                   id="phone"
                   type="tel"
@@ -329,9 +323,7 @@ export default function OnboardingPage() {
                 />
               </div>
               <div>
-                <label htmlFor="hours" className={labelClasses}>
-                  Horario
-                </label>
+                <label htmlFor="hours" className={labelClasses}>Horario</label>
                 <input
                   id="hours"
                   type="text"
@@ -346,9 +338,7 @@ export default function OnboardingPage() {
             {/* Two columns: Email + Years */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="email" className={labelClasses}>
-                  Email de contacto
-                </label>
+                <label htmlFor="email" className={labelClasses}>Email de contacto</label>
                 <input
                   id="email"
                   type="email"
@@ -359,9 +349,7 @@ export default function OnboardingPage() {
                 />
               </div>
               <div>
-                <label htmlFor="yearsInBusiness" className={labelClasses}>
-                  Años del negocio
-                </label>
+                <label htmlFor="yearsInBusiness" className={labelClasses}>Años del negocio</label>
                 <input
                   id="yearsInBusiness"
                   type="text"
@@ -385,22 +373,22 @@ export default function OnboardingPage() {
                 id="description"
                 value={form.description}
                 onChange={(e) => updateField('description', e.target.value)}
-                placeholder="Ej: Somos una barbería familiar con 15 años de experiencia. Nos especializamos en cortes clásicos y modernos. Nuestros clientes son principalmente hombres de 18-45 años del área oeste."
+                placeholder="Ej: Somos una barbería familiar con 15 años de experiencia. Nos especializamos en cortes clásicos y modernos."
                 rows={4}
                 className={`${inputClasses} resize-none`}
               />
             </div>
 
-            {/* Error message */}
+            {/* Error */}
             {errorMsg && (
-              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-400 text-sm">
+              <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/30 rounded-xl px-4 py-3 text-red-700 dark:text-red-400 text-sm">
                 {errorMsg}
               </div>
             )}
 
-            {/* Success message */}
+            {/* Success */}
             {saved && (
-              <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl px-4 py-3 text-green-700 dark:text-green-400 text-sm flex items-center gap-2">
+              <div className="bg-[var(--pioneer-teal-bg)] border border-[var(--pioneer-teal)]/20 rounded-xl px-4 py-3 text-[var(--pioneer-teal)] text-sm flex items-center gap-2">
                 <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
@@ -412,11 +400,11 @@ export default function OnboardingPage() {
             <button
               type="submit"
               disabled={status === 'submitting'}
-              className="w-full px-4 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors text-lg"
+              className="w-full px-4 py-3.5 pioneer-gradient text-white rounded-xl font-semibold hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm text-base cursor-pointer"
             >
               {status === 'submitting' ? (
                 <span className="flex items-center justify-center gap-2">
-                  <span className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                  <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   Guardando...
                 </span>
               ) : isEditing ? (
@@ -428,10 +416,10 @@ export default function OnboardingPage() {
           </form>
         </div>
 
-        <p className="text-center text-muted-foreground text-xs mt-6">
+        <p className="text-center text-muted-foreground/50 text-xs mt-6">
           {isEditing
             ? 'Los cambios se reflejarán en su próxima estrategia de marketing.'
-            : 'Esta información se usa para personalizar su estrategia de marketing. Puede editarla después.'
+            : 'Esta información se usa para personalizar su estrategia. Puede editarla después.'
           }
         </p>
       </div>

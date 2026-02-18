@@ -1,7 +1,5 @@
 // app/login/page.tsx — Login page with magic link
-//
-// Simple email-based login using Supabase magic link.
-// No password needed — user receives email with login link.
+// Pioneer UI v2 — teal/navy palette
 
 'use client'
 
@@ -37,18 +35,24 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-sm">
+      {/* Subtle background accent */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-[var(--pioneer-teal)]/5 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-[var(--pioneer-teal)]/5 rounded-full blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-sm relative z-10">
         {/* Logo / Brand */}
         <div className="text-center mb-8">
-          <div className="flex items-center justify-center gap-2 mb-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground text-lg font-bold">
+          <div className="flex items-center justify-center mb-4">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl pioneer-gradient text-white text-2xl font-bold shadow-lg">
               P
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-foreground">
-            Pioneer<span className="text-primary">Agent</span>
+          <h1 className="text-2xl font-bold text-foreground tracking-tight">
+            Pioneer<span className="text-[var(--pioneer-teal)]">Agent</span>
           </h1>
-          <p className="text-muted-foreground mt-1 text-sm">
+          <p className="text-muted-foreground mt-1.5 text-sm">
             Marketing digital con IA para su negocio
           </p>
         </div>
@@ -58,8 +62,8 @@ export default function LoginPage() {
           {status === 'sent' ? (
             // Success state
             <div className="text-center">
-              <div className="w-14 h-14 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-7 h-7 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-14 h-14 bg-[var(--pioneer-teal-bg)] border border-[var(--pioneer-teal)]/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <svg className="w-7 h-7 text-[var(--pioneer-teal)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </div>
@@ -72,9 +76,9 @@ export default function LoginPage() {
               </p>
               <button
                 onClick={() => { setStatus('idle'); setEmail(''); }}
-                className="mt-6 text-primary hover:text-primary/80 text-sm font-medium transition-colors"
+                className="mt-6 text-[var(--pioneer-teal)] hover:opacity-80 text-sm font-medium transition-colors cursor-pointer"
               >
-                Usar otro correo
+                ← Usar otro correo
               </button>
             </div>
           ) : (
@@ -88,7 +92,7 @@ export default function LoginPage() {
               </p>
 
               <form onSubmit={handleLogin}>
-                <label htmlFor="email" className="block text-sm font-medium text-foreground mb-1">
+                <label htmlFor="email" className="block text-sm font-medium text-foreground mb-1.5">
                   Correo electrónico
                 </label>
                 <input
@@ -98,7 +102,7 @@ export default function LoginPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="ejemplo@correo.com"
                   required
-                  className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-muted-foreground"
+                  className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--pioneer-teal)]/30 focus:border-[var(--pioneer-teal)]/50 placeholder:text-muted-foreground transition-all"
                   disabled={status === 'loading'}
                 />
 
@@ -109,11 +113,11 @@ export default function LoginPage() {
                 <button
                   type="submit"
                   disabled={status === 'loading' || !email.trim()}
-                  className="w-full mt-4 px-4 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors"
+                  className="w-full mt-4 px-4 py-3 pioneer-gradient text-white rounded-xl font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm cursor-pointer"
                 >
                   {status === 'loading' ? (
                     <span className="flex items-center justify-center gap-2">
-                      <span className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       Enviando...
                     </span>
                   ) : (
@@ -125,8 +129,8 @@ export default function LoginPage() {
           )}
         </div>
 
-        <p className="text-center text-muted-foreground text-xs mt-6">
-          © {new Date().getFullYear()} Pioneer Agent · Mayagüez, Puerto Rico
+        <p className="text-center text-muted-foreground/50 text-xs mt-6">
+          © {new Date().getFullYear()} Pioneer Agent · Puerto Rico
         </p>
       </div>
     </div>

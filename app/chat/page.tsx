@@ -202,6 +202,132 @@ function ActionButtons({
 }
 
 // ════════════════════════════════════════
+// POST PREVIEW CARD
+// ════════════════════════════════════════
+// Detects post content pattern from action-handler:
+//   **Post #N — Title:**\n\n---\n\ncontent\n\n---\n\n¿Le gusta...
+// And image pattern:
+//   🖼️ Imagen generada:\n\n![...](url)\n\n¿Le gusta?
+
+interface ParsedPost {
+  number: number;
+  title: string;
+  body: string;
+  trailing: string;
+}
+
+function parsePostContent(text: string): ParsedPost | null {
+  const match = text.match(/\*\*Post #(\d+)\s*[—–-]\s*([^*]+):\*\*\s*\n+---\n+([\s\S]+?)\n+---\s*\n*([\s\S]*)/);
+  if (!match) return null;
+  return {
+    number: parseInt(match[1]),
+    title: match[2].trim(),
+    body: match[3].trim(),
+    trailing: match[4].trim(),
+  };
+}
+
+function PostPreviewCard({ post }: { post: ParsedPost }) {
+  // Extract hashtags from body
+  const lines = post.body.split('\n');
+  const hashtagLine = lines.find(l => (l.match(/#\w/g) || []).length >= 2);
+  const bodyWithoutHashtags = hashtagLine
+    ? lines.filter(l => l !== hashtagLine).join('\n').trim()
+    : post.body;
+  const hashtags = hashtagLine
+    ? hashtagLine.match(/#\w+/g) || []
+    : [];
+
+  return (
+    <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-lg pioneer-gradient flex items-center justify-center">
+            <span className="text-white text-[10px] font-bold">{post.number}</span>
+          </div>
+          <span className="text-sm font-semibold text-foreground">{post.title}</span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">Post #{post.number}</span>
+      </div>
+
+      {/* Body */}
+      <div className="px-4 py-3">
+        <div className="text-[0.9375rem] text-card-foreground leading-relaxed whitespace-pre-wrap">
+          {bodyWithoutHashtags}
+        </div>
+
+        {/* Hashtags */}
+        {hashtags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {hashtags.map((tag, i) => (
+              <span key={i} className="text-xs text-[var(--pioneer-teal)] bg-[var(--pioneer-teal-bg)] px-2 py-0.5 rounded-full">
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Trailing question */}
+      {post.trailing && (
+        <div className="px-4 py-2 border-t border-border">
+          <p className="text-sm text-muted-foreground">{post.trailing}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Detect image-only message: 🖼️ Imagen generada:\n\n![...](url)\n\n¿Le gusta?
+interface ParsedImage {
+  url: string;
+  trailing: string;
+}
+
+function parseImageContent(text: string): ParsedImage | null {
+  const match = text.match(/🖼️\s*Imagen generada:\s*\n+!\[[^\]]*\]\((https?:\/\/[^)]+)\)\s*\n*([\s\S]*)/);
+  if (!match) return null;
+  return { url: match[1], trailing: match[2].trim() };
+}
+
+function ImagePreviewCard({ image }: { image: ParsedImage }) {
+  return (
+    <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
+      <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-2">
+        <span className="text-sm">🖼️</span>
+        <span className="text-sm font-semibold text-foreground">Imagen generada</span>
+      </div>
+      <div className="p-2">
+        <ImageWithRetry url={image.url} alt="Imagen generada para el post" />
+      </div>
+      {image.trailing && (
+        <div className="px-4 py-2 border-t border-border">
+          <p className="text-sm text-muted-foreground">{image.trailing}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════
+// SMART CONTENT — auto-detect post/image cards vs plain text
+// ════════════════════════════════════════
+
+function SmartContent({ content }: { content: string }) {
+  // Try post card
+  const parsedPost = parsePostContent(content);
+  if (parsedPost) return <PostPreviewCard post={parsedPost} />;
+
+  // Try image card
+  const parsedImage = parseImageContent(content);
+  if (parsedImage) return <ImagePreviewCard image={parsedImage} />;
+
+  // Fallback: regular message
+  return <MessageContent content={content} />;
+}
+
+// ════════════════════════════════════════
 // SEND ICON
 // ════════════════════════════════════════
 
@@ -658,8 +784,8 @@ export default function ChatPage() {
             <div key={resultId} className="pioneer-message-enter">
               <div className="flex gap-2.5 py-2 justify-start">
                 <PioneerAvatar />
-                <div className="max-w-[78%] rounded-2xl rounded-bl-md px-4 py-3 text-[0.9375rem] bg-[var(--pioneer-bot-bubble)] border border-[var(--pioneer-bot-border)] text-card-foreground shadow-sm">
-                  <MessageContent content={result.content} />
+                <div className="max-w-[78%]">
+                  <SmartContent content={result.content} />
                 </div>
               </div>
               {result.buttons && result.buttons.length > 0 && (
