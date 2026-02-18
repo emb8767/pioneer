@@ -809,14 +809,47 @@ Rules:
     businessInfo = JSON.parse(jsonMatch[0]);
   }
 
+  // MERGE: leer business_info existente (del onboarding form) y combinar
+  // Los datos del form tienen prioridad para campos como phone, hours que
+  // el usuario llenó explícitamente. Claude solo agrega campos nuevos.
+  let mergedInfo = businessInfo;
+  try {
+    const existingSession = await getSession(sessionId);
+    if (existingSession?.business_info && typeof existingSession.business_info === 'object') {
+      const existing = existingSession.business_info as Record<string, unknown>;
+      // Start with Claude's extracted data, then overlay existing non-null values
+      // This preserves form data (phone, hours) while adding conversation insights
+      mergedInfo = { ...businessInfo };
+      for (const [key, value] of Object.entries(existing)) {
+        if (value !== null && value !== undefined && value !== '') {
+          // Keep existing value if Claude didn't extract anything meaningful for this field
+          if (!mergedInfo[key] || mergedInfo[key] === null || mergedInfo[key] === '') {
+            mergedInfo[key] = value;
+          }
+          // For phone and hours specifically, ALWAYS prefer form data (user typed it)
+          if ((key === 'phone' || key === 'hours') && value) {
+            mergedInfo[key] = value;
+          }
+        }
+      }
+      // Preserve source marker
+      if (existing.source === 'onboarding_form') {
+        mergedInfo.source = 'onboarding_form+conversation';
+      }
+      console.log(`[Pioneer DB] Merged business_info (form + conversation) for session ${sessionId}`);
+    }
+  } catch (mergeErr) {
+    console.warn('[Pioneer Action] Could not merge business_info, using extracted only:', mergeErr);
+  }
+
   await updateSession(sessionId, {
-    business_name: businessInfo.business_name || null,
-    business_info: businessInfo,
-    email: businessInfo.email || null,
+    business_name: mergedInfo.business_name || null,
+    business_info: mergedInfo,
+    email: mergedInfo.email || null,
     status: 'active',
   });
 
-  console.log(`[Pioneer DB] Business info guardado para session ${sessionId}: ${JSON.stringify(businessInfo).substring(0, 200)}...`);
+  console.log(`[Pioneer DB] Business info guardado para session ${sessionId}: ${JSON.stringify(mergedInfo).substring(0, 200)}...`);
 }
 
 // --- Convert 24h time to 12h AM/PM for client display ---

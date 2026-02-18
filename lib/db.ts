@@ -200,7 +200,7 @@ export async function approvePlan(planId: string): Promise<DbPlan> {
 
 export async function incrementPostsPublished(planId: string): Promise<DbPlan> {
   // Atomic increment using Supabase RPC to avoid race conditions
-  const { data: rpcResult, error: rpcError } = await supabase
+  const { error: rpcError } = await supabase
     .rpc('increment_posts_published', { p_plan_id: planId });
 
   if (rpcError) {
@@ -226,8 +226,36 @@ export async function incrementPostsPublished(planId: string): Promise<DbPlan> {
     return data;
   }
 
-  // RPC returns the updated plan row
-  return rpcResult as DbPlan;
+  // RPC returns void — fetch the updated plan to check completion
+  const plan = await getPlan(planId);
+  if (!plan) throw new Error(`Plan not found after increment: ${planId}`);
+
+  // Check if plan is now complete and update status
+  if (plan.posts_published >= plan.post_count && plan.status !== 'completed') {
+    const { data, error } = await supabase
+      .from('plans')
+      .update({ status: 'completed' })
+      .eq('id', planId)
+      .select()
+      .single();
+
+    if (error) throw new Error(`Error updating plan status: ${error.message}`);
+    return data;
+  }
+
+  // Update status to in_progress if still pending
+  if (plan.status === 'pending' || plan.status === 'approved') {
+    const { data, error } = await supabase
+      .from('plans')
+      .update({ status: 'in_progress' })
+      .eq('id', planId)
+      .select()
+      .single();
+
+    if (!error && data) return data;
+  }
+
+  return plan;
 }
 
 // ============================================================
