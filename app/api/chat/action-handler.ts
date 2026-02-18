@@ -529,6 +529,7 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
         if (params.sessionId) {
           try {
             const session = await getSession(params.sessionId);
+            console.log(`[Pioneer] Checking email for session ${params.sessionId}: email=${session?.email || 'none'}`);
             if (session?.email) {
               await sendPlanCompleteEmail(
                 session.business_name || 'Su negocio',
@@ -542,7 +543,8 @@ async function handleApproveAndPublish(params: ActionRequest['params']): Promise
             console.warn('[Pioneer] Could not send plan completion email:', emailErr);
           }
         }
-      } catch {
+      } catch (summaryErr) {
+        console.error('[Pioneer Action] Error building completion summary:', summaryErr);
         completionSummary = '\n\n¿Qué le gustaría hacer ahora?';
       }
     }
