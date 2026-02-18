@@ -40,7 +40,7 @@ import type { DetectorState } from './button-detector';
 import { getOAuthCookie } from '@/lib/oauth-cookie';
 import type { OAuthPendingData } from '@/lib/oauth-cookie';
 import { COOKIE_NAME } from '@/lib/oauth-cookie';
-import { createSession, getSession, getActivePlan, getAllPlans, getPlanProgress } from '@/lib/db';
+import { createSession, getSession, getActivePlan, getAllPlans, getPlanProgress, saveMessage, getLatestContextSummary } from '@/lib/db';
 import type { PioneerUIMessage } from '@/lib/ai-types';
 
 // Allow streaming responses up to 60 seconds (Vercel serverless)
@@ -53,6 +53,7 @@ interface SessionContext {
   status: string;
   planSummary?: { name: string | null; postCount: number; postsPublished: number } | null;
   planHistory?: Array<{ name: string | null; postCount: number; postsPublished: number; status: string }>;
+  contextSummary?: string | null;
 }
 
 export async function POST(request: NextRequest) {
@@ -118,6 +119,11 @@ export async function POST(request: NextRequest) {
                   status: p.status,
                 }));
               }
+              // Load conversation context summary
+              const ctxSummary = await getLatestContextSummary(sessionId);
+              if (ctxSummary) {
+                sessionContext.contextSummary = ctxSummary.summary;
+              }
             } catch { /* don't block if plan lookup fails */ }
           }
         } else {
@@ -161,6 +167,20 @@ export async function POST(request: NextRequest) {
 
     const stream = createUIMessageStream<PioneerUIMessage>({
       async execute({ writer }) {
+        // Save the last user message to DB
+        if (sessionId && rawMessages && rawMessages.length > 0) {
+          const lastUserMsg = [...rawMessages].reverse().find(m => m.role === 'user');
+          if (lastUserMsg) {
+            const userText = lastUserMsg.parts
+              ?.filter((p: { type: string }) => p.type === 'text')
+              .map((p: { type: string; text?: string }) => p.text || '')
+              .join('\n') || '';
+            if (userText) {
+              saveMessage(sessionId, 'user', userText).catch(() => {});
+            }
+          }
+        }
+
         // Call Claude via streamText with tool loop
         const result = streamText({
           model: anthropic('claude-sonnet-4-5-20250929'),
@@ -177,6 +197,11 @@ export async function POST(request: NextRequest) {
         // After stream completes, get the full text and detect buttons
         // result.text is a promise that resolves when streaming finishes
         const fullText = await result.text;
+
+        // Save assistant response to DB
+        if (sessionId && fullText) {
+          saveMessage(sessionId, 'assistant', fullText).catch(() => {});
+        }
 
         if (fullText) {
           const detectorState: DetectorState = {

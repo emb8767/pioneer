@@ -144,6 +144,7 @@ export function buildSystemPrompt(sessionContext?: {
   status: string;
   planSummary?: { name: string | null; postCount: number; postsPublished: number } | null;
   planHistory?: Array<{ name: string | null; postCount: number; postsPublished: number; status: string }>;
+  contextSummary?: string | null;
 }): string {
   const fechaActual = getCurrentDateForPrompt();
   const upcomingDates = getUpcomingDates();
@@ -189,6 +190,14 @@ ${sessionContext!.planHistory.map(p => {
 Usa este historial para sugerir estrategias DIFERENTES a las ya usadas.`;
     }
 
+    let contextSection = '';
+    if (sessionContext!.contextSummary) {
+      contextSection = `\n\n=== CONTEXTO DE CONVERSACIONES PREVIAS ===
+${sessionContext!.contextSummary}
+
+Usa este contexto para NO repetir preguntas ya contestadas y personalizar tus recomendaciones.`;
+    }
+
     return `Eres Pioneer, un asistente de marketing digital para pequeños negocios en Puerto Rico.
 
 Fecha y hora actual: ${fechaActual}
@@ -198,7 +207,7 @@ ${fields}
 
 === DATOS DE CONTACTO ===
 ${contactInfo}
-${planSection}${historySection}
+${planSection}${historySection}${contextSection}
 
 === IDENTIDAD ===
 - Nombre: Pioneer

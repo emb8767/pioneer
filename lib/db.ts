@@ -544,3 +544,169 @@ export async function getMetricsBySession(sessionId: string): Promise<DbMetric[]
 
   return metrics || [];
 }
+
+// ============================================================
+// MESSAGES — Persist chat conversations
+// ============================================================
+
+export interface DbMessage {
+  id: string;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export async function saveMessage(
+  sessionId: string,
+  role: 'user' | 'assistant',
+  content: string,
+  metadata?: Record<string, unknown>
+): Promise<void> {
+  if (!content || content.trim().length === 0) return;
+
+  const { error } = await supabase
+    .from('messages')
+    .insert({
+      session_id: sessionId,
+      role,
+      content: content.substring(0, 50000), // Safety limit
+      metadata: metadata || {},
+    });
+
+  if (error) {
+    console.warn('[Pioneer DB] Error saving message:', error.message);
+  }
+}
+
+export async function getRecentMessages(
+  sessionId: string,
+  limit: number = 20
+): Promise<DbMessage[]> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.warn('[Pioneer DB] Error getting messages:', error.message);
+    return [];
+  }
+
+  // Return in chronological order
+  return (data || []).reverse();
+}
+
+export async function getMessageCount(sessionId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('session_id', sessionId);
+
+  if (error) return 0;
+  return count || 0;
+}
+
+// ============================================================
+// CONTEXT SUMMARIES — Condensed conversation context
+// ============================================================
+
+export interface DbContextSummary {
+  id: string;
+  session_id: string;
+  summary: string;
+  message_count: number;
+  created_at: string;
+}
+
+export async function getLatestContextSummary(sessionId: string): Promise<DbContextSummary | null> {
+  const { data, error } = await supabase
+    .from('context_summaries')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return null;
+  return data;
+}
+
+export async function saveContextSummary(
+  sessionId: string,
+  summary: string,
+  messageCount: number
+): Promise<void> {
+  const { error } = await supabase
+    .from('context_summaries')
+    .insert({
+      session_id: sessionId,
+      summary,
+      message_count: messageCount,
+    });
+
+  if (error) {
+    console.warn('[Pioneer DB] Error saving context summary:', error.message);
+  }
+}
+
+// ============================================================
+// PERFORMANCE DATA — Aggregated stats for dashboard
+// ============================================================
+
+export interface PerformanceData {
+  totalPlans: number;
+  completedPlans: number;
+  totalPosts: number;
+  publishedPosts: number;
+  totalImpressions: number;
+  totalLikes: number;
+  totalComments: number;
+  avgEngagementRate: number;
+}
+
+export async function getPerformanceData(sessionId: string): Promise<PerformanceData> {
+  const defaults: PerformanceData = {
+    totalPlans: 0, completedPlans: 0,
+    totalPosts: 0, publishedPosts: 0,
+    totalImpressions: 0, totalLikes: 0, totalComments: 0,
+    avgEngagementRate: 0,
+  };
+
+  try {
+    const plans = await getAllPlans(sessionId);
+    defaults.totalPlans = plans.length;
+    defaults.completedPlans = plans.filter(p => p.status === 'completed').length;
+
+    const planIds = plans.map(p => p.id);
+    if (planIds.length > 0) {
+      const { data: posts } = await supabase
+        .from('posts')
+        .select('id, status')
+        .in('plan_id', planIds);
+
+      if (posts) {
+        defaults.totalPosts = posts.length;
+        defaults.publishedPosts = posts.filter(p => p.status === 'scheduled' || p.status === 'published').length;
+      }
+    }
+
+    const metrics = await getMetricsBySession(sessionId);
+    if (metrics.length > 0) {
+      defaults.totalImpressions = metrics.reduce((sum, m) => sum + (m.impressions || 0), 0);
+      defaults.totalLikes = metrics.reduce((sum, m) => sum + (m.likes || 0), 0);
+      defaults.totalComments = metrics.reduce((sum, m) => sum + (m.comments || 0), 0);
+      const rates = metrics.filter(m => m.engagement_rate > 0).map(m => m.engagement_rate);
+      defaults.avgEngagementRate = rates.length > 0
+        ? rates.reduce((sum, r) => sum + r, 0) / rates.length
+        : 0;
+    }
+  } catch (err) {
+    console.warn('[Pioneer DB] Error getting performance data:', err);
+  }
+
+  return defaults;
+}

@@ -9,6 +9,7 @@ import { generateAllSuggestions } from '@/lib/suggestion-engine';
 import { syncAllMetrics } from '@/lib/metrics-sync';
 import { sendSuggestionEmail } from '@/lib/brevo-client';
 import { supabase } from '@/lib/supabase';
+import { generateAllContextSummaries } from '@/lib/context-summarizer';
 
 export async function GET(request: NextRequest) {
   // Verify cron secret (Vercel sets this automatically for cron jobs)
@@ -97,10 +98,20 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Step 4: Generate context summaries for active sessions
+  let summariesResult = { processed: 0, created: 0 };
+  try {
+    summariesResult = await generateAllContextSummaries();
+    console.log(`[Pioneer Cron] Context summaries: ${summariesResult.processed} sessions, ${summariesResult.created} created`);
+  } catch (error) {
+    console.error('[Pioneer Cron] Context summary error (non-fatal):', error);
+  }
+
   return NextResponse.json({
     success: true,
     metrics: metricsResult,
     suggestions: suggestionsResult,
     emails: { sent: emailsSent, errors: emailErrors },
+    contextSummaries: summariesResult,
   });
 }

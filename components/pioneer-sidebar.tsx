@@ -164,6 +164,80 @@ function NavItem({
   );
 }
 
+function BarChartIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" />
+    </svg>
+  );
+}
+
+// ════════════════════════════════════════
+// PERFORMANCE MINI DASHBOARD
+// ════════════════════════════════════════
+
+interface PerformanceData {
+  totalPlans: number;
+  completedPlans: number;
+  totalPosts: number;
+  publishedPosts: number;
+  totalImpressions: number;
+  totalLikes: number;
+  totalComments: number;
+  avgEngagementRate: number;
+}
+
+function PerformanceMini() {
+  const [data, setData] = useState<PerformanceData | null>(null);
+
+  useEffect(() => {
+    fetch('/api/performance')
+      .then(res => res.json())
+      .then(d => {
+        if (d.totalPosts > 0) setData(d);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (!data) return null;
+
+  const formatNum = (n: number) => {
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+    return n.toString();
+  };
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-1.5 px-1 mb-2">
+        <BarChartIcon />
+        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Rendimiento</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="p-2.5 rounded-lg bg-muted/50 border border-border/50">
+          <p className="text-lg font-bold text-foreground leading-none">{data.publishedPosts}</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Posts publicados</p>
+        </div>
+        <div className="p-2.5 rounded-lg bg-muted/50 border border-border/50">
+          <p className="text-lg font-bold text-foreground leading-none">{data.completedPlans}</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Planes completados</p>
+        </div>
+        {data.totalImpressions > 0 && (
+          <div className="p-2.5 rounded-lg bg-muted/50 border border-border/50">
+            <p className="text-lg font-bold text-[var(--pioneer-teal)] leading-none">{formatNum(data.totalImpressions)}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">Impresiones</p>
+          </div>
+        )}
+        {data.totalLikes > 0 && (
+          <div className="p-2.5 rounded-lg bg-muted/50 border border-border/50">
+            <p className="text-lg font-bold text-[var(--pioneer-teal)] leading-none">{formatNum(data.totalLikes)}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">Likes</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ════════════════════════════════════════
 // PIONEER SIDEBAR
 // ════════════════════════════════════════
@@ -277,6 +351,9 @@ export function PioneerSidebar() {
             onClick={() => router.push('/onboarding')}
           />
         </div>
+
+        {/* ═══ PERFORMANCE DASHBOARD ═══ */}
+        <PerformanceMini />
 
       </SidebarContent>
 
