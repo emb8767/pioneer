@@ -72,6 +72,8 @@ export async function GET(request: NextRequest) {
       exists: true,
       sessionId: session.id,
       businessName: session.business_name,
+      businessInfo: session.business_info,
+      email: session.email,
       status: session.status,
       hasBusinessInfo,
       needsOnboarding: false,
