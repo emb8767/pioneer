@@ -1,24 +1,8 @@
 'use client';
 
-// page.tsx — AI SDK 6: useChat hook + Pioneer custom components
-//
-// WHAT CHANGED:
-//   OLD: useState + manual fetch to /api/chat → JSON response → setMessages
-//   NEW: useChat hook → SSE streaming → automatic message state
-//
-// SESSION ID FIX (Fase 6.5):
-//   OLD: transient data part via onData → BROKEN (onData never fired)
-//   NEW: X-Pioneer-Session-Id response header → read via custom fetch wrapper
-//   The custom fetch wraps the native fetch, reads the header from the
-//   response, and saves sessionId to localStorage + React state.
-//   This is 100% reliable because headers are always available.
-//
-// WHAT STAYS THE SAME:
-//   - MessageContent (markdown parsing, images, links, bold)
-//   - ImageWithRetry (CDN delay handling)
-//   - ActionButtons (visual component)
-//   - /api/chat/action calls for deterministic execution
-//   - ?pending_connection OAuth callback handling
+// page.tsx — Pioneer Chat UI v2.0
+// Visual redesign: Tuyo-inspired professional messaging UI
+// All business logic (useChat, actions, sessions, buttons) unchanged
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
@@ -26,14 +10,21 @@ import { DefaultChatTransport } from 'ai';
 import type { PioneerUIMessage, ButtonConfig, ActionContext } from '@/lib/ai-types';
 
 // ════════════════════════════════════════
+// PIONEER AVATAR
+// ════════════════════════════════════════
+
+function PioneerAvatar({ size = 'md' }: { size?: 'sm' | 'md' }) {
+  const dims = size === 'sm' ? 'h-7 w-7 text-xs' : 'h-8 w-8 text-sm';
+  return (
+    <div className={`${dims} flex items-center justify-center rounded-full bg-[var(--pioneer-teal)] text-white font-bold shrink-0 shadow-sm`}>
+      P
+    </div>
+  );
+}
+
+// ════════════════════════════════════════
 // RENDERIZAR CONTENIDO DEL MENSAJE
 // ════════════════════════════════════════
-// Parsea:
-// 1. Markdown images: ![alt](url) → <img>
-// 2. Bare replicate/late.dev/image URLs → <img>
-// 3. Markdown links: [text](url) → <a>
-// 4. Bare URLs (https://...) → <a> clickable
-// 5. Bold: **text** → <strong>
 
 function MessageContent({ content }: { content: string }) {
   const parts: React.ReactNode[] = [];
@@ -61,44 +52,30 @@ function MessageContent({ content }: { content: string }) {
       }
 
       if (match[1] !== undefined && match[2]) {
-        const url = match[2];
-        const alt = match[1] || 'Imagen generada';
         parts.push(
-          <ImageWithRetry key={`img-${lineIdx}-${match.index}`} url={url} alt={alt} />
+          <ImageWithRetry key={`img-${lineIdx}-${match.index}`} url={match[2]} alt={match[1] || 'Imagen generada'} />
         );
       } else if (match[3]) {
-        const url = match[3];
         parts.push(
-          <ImageWithRetry key={`bareimg-${lineIdx}-${match.index}`} url={url} alt="Imagen generada" />
+          <ImageWithRetry key={`bareimg-${lineIdx}-${match.index}`} url={match[3]} alt="Imagen generada" />
         );
       } else if (match[4] && match[5]) {
         parts.push(
-          <a
-            key={`mdlink-${lineIdx}-${match.index}`}
-            href={match[5]}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline hover:text-primary/80 break-all"
-          >
+          <a key={`mdlink-${lineIdx}-${match.index}`} href={match[5]} target="_blank" rel="noopener noreferrer"
+            className="text-[var(--pioneer-teal)] underline decoration-[var(--pioneer-teal)]/30 underline-offset-2 hover:decoration-[var(--pioneer-teal)] break-all transition-colors">
             {match[4]}
           </a>
         );
       } else if (match[6]) {
-        const url = match[6];
         parts.push(
-          <a
-            key={`link-${lineIdx}-${match.index}`}
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline hover:text-primary/80 break-all"
-          >
-            {url}
+          <a key={`link-${lineIdx}-${match.index}`} href={match[6]} target="_blank" rel="noopener noreferrer"
+            className="text-[var(--pioneer-teal)] underline decoration-[var(--pioneer-teal)]/30 underline-offset-2 hover:decoration-[var(--pioneer-teal)] break-all transition-colors">
+            {match[6]}
           </a>
         );
       } else if (match[7]) {
         parts.push(
-          <strong key={`bold-${lineIdx}-${match.index}`}>{match[7]}</strong>
+          <strong key={`bold-${lineIdx}-${match.index}`} className="font-semibold">{match[7]}</strong>
         );
       }
 
@@ -114,7 +91,7 @@ function MessageContent({ content }: { content: string }) {
     }
   }
 
-  return <div className="whitespace-pre-wrap">{parts}</div>;
+  return <div className="whitespace-pre-wrap leading-relaxed">{parts}</div>;
 }
 
 // ════════════════════════════════════════
@@ -139,8 +116,8 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
           <img
             src={imgSrc}
             alt={alt}
-            className={`max-w-full rounded-lg shadow-md transition-opacity duration-300 ${
-              status === 'loaded' ? 'opacity-100' : 'opacity-0'
+            className={`max-w-full rounded-xl shadow-md transition-all duration-500 ${
+              status === 'loaded' ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
             }`}
             style={{ maxHeight: '400px', objectFit: 'contain' }}
             onLoad={() => setStatus('loaded')}
@@ -161,7 +138,7 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
           />
           {(status === 'loading' || status === 'retrying') && (
             <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
-              <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+              <div className="w-4 h-4 border-2 border-[var(--pioneer-teal)] border-t-transparent rounded-full animate-spin" />
               {status === 'retrying' ? `Cargando imagen (intento ${retryCount.current + 1})...` : 'Cargando imagen...'}
             </div>
           )}
@@ -172,7 +149,7 @@ function ImageWithRetry({ url, alt }: { url: string; alt: string }) {
 }
 
 // ════════════════════════════════════════
-// COMPONENTE DE BOTONES
+// BOTONES DE ACCIÓN — PILL STYLE
 // ════════════════════════════════════════
 
 function ActionButtons({
@@ -187,25 +164,25 @@ function ActionButtons({
   onButtonClick: (button: ButtonConfig) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2 mt-3">
+    <div className="flex flex-wrap gap-2 mt-2">
       {loading ? (
-        <div className="flex items-center gap-2 px-4 py-2 text-sm text-primary">
-          <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <div className="flex items-center gap-2 px-4 py-2 text-sm text-[var(--pioneer-teal)]">
+          <div className="w-4 h-4 border-2 border-[var(--pioneer-teal)] border-t-transparent rounded-full animate-spin" />
           Procesando...
         </div>
       ) : (
         buttons.map((button) => {
-          const baseStyles = 'px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border';
+          const base = 'px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border cursor-pointer';
 
-          let styleClasses: string;
+          let style: string;
           if (disabled) {
-            styleClasses = 'opacity-50 cursor-not-allowed border-border text-muted-foreground bg-muted';
+            style = 'opacity-40 cursor-not-allowed border-border text-muted-foreground bg-muted';
           } else if (button.style === 'primary') {
-            styleClasses = 'border-primary text-primary bg-background hover:bg-accent cursor-pointer';
+            style = 'border-[var(--pioneer-teal)] text-[var(--pioneer-teal)] bg-[var(--pioneer-teal-bg)] hover:bg-[var(--pioneer-teal)]/10 shadow-sm';
           } else if (button.style === 'ghost') {
-            styleClasses = 'border-dashed border-border text-muted-foreground bg-background hover:bg-accent cursor-pointer';
+            style = 'border-dashed border-border text-muted-foreground bg-transparent hover:bg-accent';
           } else {
-            styleClasses = 'border-border text-foreground bg-background hover:bg-accent cursor-pointer';
+            style = 'border-border text-foreground bg-card hover:bg-accent shadow-sm';
           }
 
           return (
@@ -213,7 +190,7 @@ function ActionButtons({
               key={button.id}
               onClick={() => !disabled && onButtonClick(button)}
               disabled={disabled}
-              className={`${baseStyles} ${styleClasses}`}
+              className={`${base} ${style}`}
             >
               {button.label}
             </button>
@@ -225,6 +202,20 @@ function ActionButtons({
 }
 
 // ════════════════════════════════════════
+// SEND ICON
+// ════════════════════════════════════════
+
+function SendIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+    </svg>
+  );
+}
+
+// ════════════════════════════════════════
 // COMPONENTE PRINCIPAL
 // ════════════════════════════════════════
 
@@ -232,7 +223,7 @@ export default function ChatPage() {
   // --- Pioneer state (not managed by useChat) ---
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null); // message ID with action in progress
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [disabledMessages, setDisabledMessages] = useState<Set<string>>(new Set());
   const [pendingConnectionHandled, setPendingConnectionHandled] = useState(false);
   const [actionResults, setActionResults] = useState<Map<string, {
@@ -240,12 +231,10 @@ export default function ChatPage() {
     buttons?: ButtonConfig[];
     actionContext?: ActionContext;
   }>>(new Map());
-  // Welcome screen data — null = new user, object = returning user
   const [welcomeData, setWelcomeData] = useState<{
     businessName: string | null;
     plan: { name: string; postCount: number; postsPublished: number } | null;
   } | null>(null);
-  // Suggestions from suggestion engine (Fase 7)
   const [suggestions, setSuggestions] = useState<Array<{
     id: string;
     type: string;
@@ -256,41 +245,25 @@ export default function ChatPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
   const [chatInput, setChatInput] = useState('');
-
-  // --- Ref to hold latest sessionId for the fetch wrapper ---
-  // Using a ref so the custom fetch always has the current value
-  // without needing to recreate the transport on every sessionId change.
   const sessionIdRef = useRef<string | null>(null);
 
-  // Keep ref in sync with state
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
   // --- Custom fetch that reads X-Pioneer-Session-Id header ---
-  // This is the FIX for the broken transient data part approach.
-  // The backend sends sessionId as a response header, which is
-  // always readable regardless of streaming protocol quirks.
   const pioneerFetch = useCallback(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await fetch(input, init);
-
-    // Read sessionId from response header
     const headerSessionId = response.headers.get('X-Pioneer-Session-Id');
     if (headerSessionId && !sessionIdRef.current) {
-      // First time receiving sessionId — save it
       sessionIdRef.current = headerSessionId;
       setSessionId(headerSessionId);
       localStorage.setItem('pioneer_session_id', headerSessionId);
-      console.log(`[Pioneer] SessionId recibido via header: ${headerSessionId}`);
     }
-
     return response;
   }, []);
 
-  // --- Transport with custom fetch (stable — no sessionId dependency) ---
-  // body uses a function so it always reads the latest sessionIdRef.current
   const transport = useMemo(
     () => new DefaultChatTransport({
       api: '/api/chat',
@@ -300,17 +273,9 @@ export default function ChatPage() {
     [pioneerFetch]
   );
 
-  // --- useChat hook (manages conversation state + streaming) ---
-  const {
-    messages,
-    status,
-    sendMessage,
-    error,
-  } = useChat<PioneerUIMessage>({
+  const { messages, status, sendMessage, error } = useChat<PioneerUIMessage>({
     transport,
-    onError: (err) => {
-      console.error('[Pioneer] Chat error:', err);
-    },
+    onError: (err) => console.error('[Pioneer] Chat error:', err),
   });
 
   const isLoading = status === 'submitted' || status === 'streaming';
@@ -320,48 +285,39 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, actionResults]);
 
-  // --- Check session on mount (auth-first, localStorage fallback) ---
+  // --- Check session on mount ---
   useEffect(() => {
     if (sessionChecked) return;
     setSessionChecked(true);
 
-    // First: try to find session by authenticated user (no id param)
     fetch('/api/chat/session')
       .then(res => res.json())
       .then(data => {
         if (data.needsOnboarding) {
-          // User has no business info → redirect to onboarding
           window.location.href = '/onboarding';
           return;
         }
-
         if (data.exists && data.sessionId) {
-          // Found session by user_id → use it
           setSessionId(data.sessionId);
           sessionIdRef.current = data.sessionId;
           localStorage.setItem('pioneer_session_id', data.sessionId);
-          console.log(`[Pioneer] Sesión encontrada por auth: ${data.businessName}`);
           setWelcomeData({
             businessName: data.businessName,
             plan: data.plan || null,
           });
-          // Fetch pending suggestions
           fetch(`/api/suggestions?sessionId=${data.sessionId}`)
             .then(res => res.json())
             .then(sugData => {
               if (sugData.suggestions?.length > 0) {
                 setSuggestions(sugData.suggestions);
-                console.log(`[Pioneer] ${sugData.suggestions.length} sugerencias cargadas`);
               }
             })
-            .catch(() => { /* non-fatal */ });
+            .catch(() => {});
         } else {
-          // No session found at all — redirect to onboarding
           window.location.href = '/onboarding';
         }
       })
       .catch(() => {
-        // Network error — try localStorage fallback
         const savedSessionId = localStorage.getItem('pioneer_session_id');
         if (savedSessionId) {
           setSessionId(savedSessionId);
@@ -373,47 +329,35 @@ export default function ChatPage() {
   // --- Detect ?pending_connection in URL ---
   useEffect(() => {
     if (pendingConnectionHandled) return;
-
     const urlParams = new URLSearchParams(window.location.search);
     const pendingPlatform = urlParams.get('pending_connection');
-
     if (pendingPlatform) {
       setPendingConnectionHandled(true);
       window.history.replaceState({}, '', window.location.pathname);
-
       const platformName = getPlatformDisplayName(pendingPlatform);
       const autoMessage = `Acabo de autorizar ${platformName}.\nNecesito completar la conexión.`;
-
-      setTimeout(() => {
-        sendMessage({ text: autoMessage });
-      }, 500);
+      setTimeout(() => { sendMessage({ text: autoMessage }); }, 500);
     }
   }, [pendingConnectionHandled, sendMessage]);
 
   // ════════════════════════════════════════
-  // EXTRACT BUTTONS FROM MESSAGE PARTS
+  // EXTRACT BUTTONS & TEXT FROM PARTS
   // ════════════════════════════════════════
+
   const getButtonsFromMessage = useCallback((message: PioneerUIMessage): {
     buttons: ButtonConfig[];
     actionContext?: ActionContext;
   } | null => {
     if (message.role !== 'assistant') return null;
-
-    // Check for data-pioneer-buttons parts
     for (const part of message.parts) {
       if (part.type === 'data-pioneer-buttons') {
         const data = part.data as { buttons: ButtonConfig[]; actionContext?: ActionContext };
-        if (data.buttons && data.buttons.length > 0) {
-          return data;
-        }
+        if (data.buttons && data.buttons.length > 0) return data;
       }
     }
     return null;
   }, []);
 
-  // ════════════════════════════════════════
-  // EXTRACT TEXT FROM MESSAGE PARTS
-  // ════════════════════════════════════════
   const getTextFromMessage = useCallback((message: PioneerUIMessage): string => {
     return message.parts
       .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
@@ -422,8 +366,9 @@ export default function ChatPage() {
   }, []);
 
   // ════════════════════════════════════════
-  // HANDLE SEND MESSAGE
+  // HANDLE SEND
   // ════════════════════════════════════════
+
   const handleSend = useCallback(() => {
     if (!chatInput.trim() || isLoading) return;
     const text = chatInput.trim();
@@ -432,8 +377,9 @@ export default function ChatPage() {
   }, [chatInput, isLoading, setChatInput, sendMessage]);
 
   // ════════════════════════════════════════
-  // EXECUTE ACTION (deterministic pipeline)
+  // EXECUTE ACTION
   // ════════════════════════════════════════
+
   const executeAction = useCallback(async (
     button: ButtonConfig,
     messageId: string,
@@ -441,13 +387,11 @@ export default function ChatPage() {
   ) => {
     setActionLoading(messageId);
 
-    // Merge actionContext: inherit sessionId from state
     const mergedContext: ActionContext = { ...actionContext };
     if (!mergedContext.sessionId && sessionId) {
       mergedContext.sessionId = sessionId;
     }
 
-    // Find planId from previous messages if missing
     if (!mergedContext.planId) {
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
@@ -465,7 +409,6 @@ export default function ChatPage() {
       }
     }
 
-    // Build params
     const params: Record<string, unknown> = {
       sessionId: mergedContext.sessionId,
       planId: mergedContext.planId,
@@ -473,9 +416,7 @@ export default function ChatPage() {
       imageUrls: mergedContext.imageUrls,
     };
 
-    // For approve_plan: send plan text + conversation context
     if (button.action === 'approve_plan') {
-      // Find the assistant message with the plan
       for (let i = messages.length - 1; i >= 0; i--) {
         const text = getTextFromMessage(messages[i] as PioneerUIMessage);
         if (messages[i].role === 'assistant' && /posts/i.test(text)) {
@@ -483,7 +424,6 @@ export default function ChatPage() {
           break;
         }
       }
-      // Conversation context for business_info extraction
       const contextMessages = messages
         .slice(0, 20)
         .map(m => {
@@ -494,7 +434,6 @@ export default function ChatPage() {
       params.conversationContext = contextMessages;
     }
 
-    // For next_post: send conversation context
     if (button.action === 'next_post') {
       const contextMessages = messages
         .slice(0, 20)
@@ -510,22 +449,16 @@ export default function ChatPage() {
       const response = await fetch('/api/chat/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: button.action,
-          params,
-        }),
+        body: JSON.stringify({ action: button.action, params }),
       });
 
       const data = await response.json();
-
-      // Store action result keyed by a unique ID
       const resultId = `action-${messageId}-${Date.now()}`;
       setActionResults(prev => new Map(prev).set(resultId, {
         content: data.message,
         buttons: data.buttons,
         actionContext: { ...mergedContext, ...data.actionContext },
       }));
-
     } catch (error) {
       console.error('Error ejecutando acción:', error);
       const resultId = `action-${messageId}-${Date.now()}`;
@@ -540,17 +473,15 @@ export default function ChatPage() {
   // ════════════════════════════════════════
   // HANDLE BUTTON CLICK
   // ════════════════════════════════════════
+
   const handleButtonClick = useCallback((button: ButtonConfig, messageId: string, actionContext?: ActionContext) => {
-    // Disable buttons on this message
     setDisabledMessages(prev => new Set(prev).add(messageId));
 
     if (button.type === 'option') {
       if (button.chatMessage === '') {
-        // "Otro" / "Cambios" → focus input
         inputRef.current?.focus();
         return;
       }
-      // Send as chat message through useChat
       sendMessage({ text: button.chatMessage! });
     } else if (button.type === 'action') {
       executeAction(button, messageId, actionContext);
@@ -564,46 +495,70 @@ export default function ChatPage() {
     }
   };
 
-  // ════════════════════════════════════════
-  // WELCOME SCREEN SUGGESTIONS
-  // ════════════════════════════════════════
-  const showWelcomeScreen = messages.length === 0 && !isLoading;
-
   const handleSuggestionClick = useCallback((text: string) => {
     sendMessage({ text });
   }, [sendMessage]);
+
+  const showWelcomeScreen = messages.length === 0 && !isLoading;
 
   // ════════════════════════════════════════
   // RENDER
   // ════════════════════════════════════════
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="max-w-3xl mx-auto space-y-4">
+
+      {/* ══════ MESSAGES AREA ══════ */}
+      <div className="flex-1 overflow-y-auto pioneer-scrollbar">
+        <div className="max-w-2xl mx-auto px-4 py-6 space-y-1">
 
           {/* ══════ WELCOME SCREEN ══════ */}
           {showWelcomeScreen && (
-            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center pioneer-message-enter">
+
+              {/* Logo */}
+              <div className="w-14 h-14 rounded-2xl pioneer-gradient flex items-center justify-center mb-6 shadow-lg">
+                <span className="text-white text-2xl font-bold">P</span>
+              </div>
+
               {welcomeData?.businessName ? (
                 <>
-                  <h2 className="text-2xl font-bold text-foreground mb-2">
-                    ¡Bienvenido de vuelta!
+                  <h2 className="text-2xl font-bold text-foreground mb-1">
+                    ¡Hola de nuevo!
                   </h2>
-                  <p className="text-muted-foreground mb-8 text-lg">
-                    {welcomeData.businessName} — ¿qué hacemos hoy?
+                  <p className="text-muted-foreground mb-8 text-base">
+                    {welcomeData.businessName} — ¿en qué le ayudo hoy?
                   </p>
 
-                  {/* Suggestion cards from suggestion engine */}
+                  {/* Plan status card */}
+                  {welcomeData.plan && (
+                    <div className="w-full max-w-md mb-6 p-4 rounded-2xl border border-border bg-card shadow-sm">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Plan activo</span>
+                        <span className="text-xs text-[var(--pioneer-teal)] font-semibold">
+                          {welcomeData.plan.postsPublished}/{welcomeData.plan.postCount} posts
+                        </span>
+                      </div>
+                      <p className="text-sm font-medium text-foreground mb-2">{welcomeData.plan.name}</p>
+                      <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full pioneer-gradient rounded-full transition-all duration-500"
+                          style={{ width: `${(welcomeData.plan.postsPublished / welcomeData.plan.postCount) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Suggestion cards from engine */}
                   {suggestions.length > 0 && (
-                    <div className="w-full max-w-lg mb-6">
-                      <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Sugerencias para su negocio</p>
+                    <div className="w-full max-w-md mb-6">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3 text-left">
+                        Sugerencias para su negocio
+                      </p>
                       <div className="space-y-2">
                         {suggestions.map((sug) => (
                           <button
                             key={sug.id}
                             onClick={() => {
-                              // Mark as accepted
                               fetch('/api/suggestions', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -612,9 +567,11 @@ export default function ChatPage() {
                               setSuggestions(prev => prev.filter(s => s.id !== sug.id));
                               handleSuggestionClick(sug.title);
                             }}
-                            className="w-full px-4 py-3 rounded-xl border border-primary/30 bg-primary/5 text-left hover:bg-primary/10 hover:border-primary/50 transition-all duration-200 cursor-pointer"
+                            className="w-full px-4 py-3 rounded-xl border border-[var(--pioneer-teal)]/20 bg-[var(--pioneer-teal-bg)] text-left hover:border-[var(--pioneer-teal)]/40 hover:shadow-sm transition-all duration-200 cursor-pointer group"
                           >
-                            <span className="text-sm font-medium text-foreground">{sug.title}</span>
+                            <span className="text-sm font-medium text-foreground group-hover:text-[var(--pioneer-teal)] transition-colors">
+                              {sug.title}
+                            </span>
                             <span className="block text-xs text-muted-foreground mt-0.5">{sug.description}</span>
                           </button>
                         ))}
@@ -622,50 +579,27 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
-                    <WelcomeSuggestion
-                      text="Crear un nuevo plan de marketing"
-                      onClick={handleSuggestionClick}
-                    />
-                    <WelcomeSuggestion
-                      text="Conectar más redes sociales"
-                      onClick={handleSuggestionClick}
-                    />
-                    <WelcomeSuggestion
-                      text="Revisar mis estrategias anteriores"
-                      onClick={handleSuggestionClick}
-                    />
-                    <WelcomeSuggestion
-                      text="Tengo una pregunta sobre marketing"
-                      onClick={handleSuggestionClick}
-                    />
+                  {/* Quick actions */}
+                  <div className="grid grid-cols-2 gap-2 w-full max-w-md">
+                    <QuickAction text="Crear un nuevo plan de marketing" onClick={handleSuggestionClick} />
+                    <QuickAction text="Conectar más redes sociales" onClick={handleSuggestionClick} />
+                    <QuickAction text="Revisar mis estrategias anteriores" onClick={handleSuggestionClick} />
+                    <QuickAction text="Tengo una pregunta sobre marketing" onClick={handleSuggestionClick} />
                   </div>
                 </>
               ) : (
                 <>
-                  <h2 className="text-2xl font-bold text-foreground mb-2">
+                  <h2 className="text-2xl font-bold text-foreground mb-1">
                     ¡Bienvenido a Pioneer!
                   </h2>
-                  <p className="text-muted-foreground mb-8 text-lg">
-                    Su asistente de marketing digital para hacer crecer su negocio en Puerto Rico.
+                  <p className="text-muted-foreground mb-8 text-base">
+                    Marketing digital inteligente para su negocio en Puerto Rico.
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
-                    <WelcomeSuggestion
-                      text="Quiero crear mi primera campaña de marketing"
-                      onClick={handleSuggestionClick}
-                    />
-                    <WelcomeSuggestion
-                      text="Necesito conectar mis redes sociales"
-                      onClick={handleSuggestionClick}
-                    />
-                    <WelcomeSuggestion
-                      text="¿Qué puede hacer Pioneer por mi negocio?"
-                      onClick={handleSuggestionClick}
-                    />
-                    <WelcomeSuggestion
-                      text="Quiero saber más antes de empezar"
-                      onClick={handleSuggestionClick}
-                    />
+                  <div className="grid grid-cols-2 gap-2 w-full max-w-md">
+                    <QuickAction text="Quiero crear mi primera campaña" onClick={handleSuggestionClick} />
+                    <QuickAction text="Conectar mis redes sociales" onClick={handleSuggestionClick} />
+                    <QuickAction text="¿Qué puede hacer Pioneer?" onClick={handleSuggestionClick} />
+                    <QuickAction text="Quiero saber más antes de empezar" onClick={handleSuggestionClick} />
                   </div>
                 </>
               )}
@@ -678,17 +612,21 @@ export default function ChatPage() {
             const text = getTextFromMessage(pioneerMsg);
             const buttonData = getButtonsFromMessage(pioneerMsg);
             const isDisabled = disabledMessages.has(message.id);
+            const isUser = message.role === 'user';
 
             return (
-              <div key={message.id}>
-                {/* Message bubble */}
+              <div key={message.id} className="pioneer-message-enter">
                 {text && (
-                  <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`flex gap-2.5 py-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+                    {/* Bot avatar */}
+                    {!isUser && <PioneerAvatar />}
+
+                    {/* Bubble */}
                     <div
-                      className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                        message.role === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-card border border-border text-card-foreground'
+                      className={`max-w-[78%] rounded-2xl px-4 py-3 text-[0.9375rem] ${
+                        isUser
+                          ? 'bg-[var(--pioneer-user-bubble)] text-[var(--pioneer-user-text)] rounded-br-md'
+                          : 'bg-[var(--pioneer-bot-bubble)] border border-[var(--pioneer-bot-border)] text-card-foreground rounded-bl-md shadow-sm'
                       }`}
                     >
                       <MessageContent content={text} />
@@ -696,10 +634,10 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* Buttons from data parts */}
-                {message.role === 'assistant' && buttonData && buttonData.buttons.length > 0 && (
-                  <div className="flex justify-start mt-1">
-                    <div className="max-w-[80%]">
+                {/* Buttons */}
+                {!isUser && buttonData && buttonData.buttons.length > 0 && (
+                  <div className="flex justify-start pl-10 pb-1">
+                    <div className="max-w-[78%]">
                       <ActionButtons
                         buttons={buttonData.buttons}
                         disabled={isDisabled || isLoading}
@@ -715,17 +653,18 @@ export default function ChatPage() {
             );
           })}
 
-          {/* Action results (from /api/chat/action) */}
+          {/* Action results */}
           {Array.from(actionResults.entries()).map(([resultId, result]) => (
-            <div key={resultId}>
-              <div className="flex justify-start">
-                <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-card border border-border text-card-foreground">
+            <div key={resultId} className="pioneer-message-enter">
+              <div className="flex gap-2.5 py-2 justify-start">
+                <PioneerAvatar />
+                <div className="max-w-[78%] rounded-2xl rounded-bl-md px-4 py-3 text-[0.9375rem] bg-[var(--pioneer-bot-bubble)] border border-[var(--pioneer-bot-border)] text-card-foreground shadow-sm">
                   <MessageContent content={result.content} />
                 </div>
               </div>
               {result.buttons && result.buttons.length > 0 && (
-                <div className="flex justify-start mt-1">
-                  <div className="max-w-[80%]">
+                <div className="flex justify-start pl-10 pb-1">
+                  <div className="max-w-[78%]">
                     <ActionButtons
                       buttons={result.buttons}
                       disabled={disabledMessages.has(resultId) || isLoading}
@@ -749,23 +688,25 @@ export default function ChatPage() {
             </div>
           ))}
 
-          {/* Loading indicator */}
+          {/* Typing indicator */}
           {status === 'submitted' && (
-            <div className="flex justify-start">
-              <div className="bg-card border border-border rounded-2xl px-4 py-3">
-                <div className="flex space-x-2">
-                  <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-                  <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.1s]" />
-                  <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.2s]" />
+            <div className="flex gap-2.5 py-2 justify-start pioneer-message-enter">
+              <PioneerAvatar />
+              <div className="bg-[var(--pioneer-bot-bubble)] border border-[var(--pioneer-bot-border)] rounded-2xl rounded-bl-md px-4 py-3 shadow-sm">
+                <div className="flex gap-1.5">
+                  <div className="w-2 h-2 bg-muted-foreground/50 rounded-full pioneer-typing-dot" />
+                  <div className="w-2 h-2 bg-muted-foreground/50 rounded-full pioneer-typing-dot" />
+                  <div className="w-2 h-2 bg-muted-foreground/50 rounded-full pioneer-typing-dot" />
                 </div>
               </div>
             </div>
           )}
 
-          {/* Error display */}
+          {/* Error */}
           {error && (
-            <div className="flex justify-start">
-              <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-red-50 border border-red-200 text-red-700">
+            <div className="flex gap-2.5 py-2 justify-start pioneer-message-enter">
+              <PioneerAvatar />
+              <div className="max-w-[78%] rounded-2xl rounded-bl-md px-4 py-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/30 text-red-700 dark:text-red-400 text-sm">
                 Lo siento, hubo un error al procesar su mensaje. Por favor, intente de nuevo.
               </div>
             </div>
@@ -775,26 +716,31 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Input */}
-      <div className="border-t border-border bg-background px-4 py-4">
-        <div className="max-w-3xl mx-auto flex gap-3">
-          <textarea
-            ref={inputRef}
-            value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            onKeyDown={handleKeyPress}
-            placeholder="Escriba su mensaje..."
-            className="flex-1 resize-none rounded-xl border border-input bg-background text-foreground px-4 py-3 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-muted-foreground"
-            rows={1}
-            disabled={isLoading}
-          />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || !chatInput.trim()}
-            className="px-6 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors"
-          >
-            Enviar
-          </button>
+      {/* ══════ INPUT BAR ══════ */}
+      <div className="border-t border-border bg-background/80 pioneer-glass px-4 py-3">
+        <div className="max-w-2xl mx-auto">
+          <div className="flex items-end gap-2 bg-card border border-border rounded-2xl px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-[var(--pioneer-teal)]/30 focus-within:border-[var(--pioneer-teal)]/50 transition-all">
+            <textarea
+              ref={inputRef}
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={handleKeyPress}
+              placeholder="Escriba su mensaje..."
+              className="flex-1 resize-none bg-transparent text-foreground text-[0.9375rem] placeholder:text-muted-foreground focus:outline-none pioneer-input"
+              rows={1}
+              disabled={isLoading}
+            />
+            <button
+              onClick={handleSend}
+              disabled={isLoading || !chatInput.trim()}
+              className="shrink-0 p-2 rounded-xl bg-[var(--pioneer-teal)] text-white hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
+            >
+              <SendIcon />
+            </button>
+          </div>
+          <p className="text-center text-xs text-muted-foreground/50 mt-2">
+            Pioneer Agent — Marketing inteligente para su negocio
+          </p>
         </div>
       </div>
     </div>
@@ -802,20 +748,14 @@ export default function ChatPage() {
 }
 
 // ════════════════════════════════════════
-// WELCOME SUGGESTION BUTTON
+// QUICK ACTION BUTTON (welcome screen)
 // ════════════════════════════════════════
 
-function WelcomeSuggestion({
-  text,
-  onClick,
-}: {
-  text: string;
-  onClick: (text: string) => void;
-}) {
+function QuickAction({ text, onClick }: { text: string; onClick: (text: string) => void }) {
   return (
     <button
       onClick={() => onClick(text)}
-      className="px-4 py-3 rounded-xl border border-border bg-card text-card-foreground text-sm text-left hover:bg-accent hover:border-border transition-all duration-200 cursor-pointer"
+      className="px-4 py-3 rounded-xl border border-border bg-card text-card-foreground text-sm text-left hover:border-[var(--pioneer-teal)]/30 hover:shadow-sm transition-all duration-200 cursor-pointer"
     >
       {text}
     </button>
@@ -828,19 +768,11 @@ function WelcomeSuggestion({
 
 function getPlatformDisplayName(platform: string): string {
   const names: Record<string, string> = {
-    facebook: 'Facebook',
-    instagram: 'Instagram',
-    twitter: 'Twitter/X',
-    linkedin: 'LinkedIn',
-    tiktok: 'TikTok',
-    youtube: 'YouTube',
-    threads: 'Threads',
-    reddit: 'Reddit',
-    pinterest: 'Pinterest',
-    bluesky: 'Bluesky',
-    googlebusiness: 'Google Business',
-    telegram: 'Telegram',
-    snapchat: 'Snapchat',
+    facebook: 'Facebook', instagram: 'Instagram', twitter: 'Twitter/X',
+    linkedin: 'LinkedIn', tiktok: 'TikTok', youtube: 'YouTube',
+    threads: 'Threads', reddit: 'Reddit', pinterest: 'Pinterest',
+    bluesky: 'Bluesky', googlebusiness: 'Google Business',
+    telegram: 'Telegram', snapchat: 'Snapchat',
   };
   return names[platform] || platform;
 }
