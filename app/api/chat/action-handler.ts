@@ -815,8 +815,10 @@ Rules:
   // Los datos del form tienen prioridad para campos como phone, hours que
   // el usuario llenó explícitamente. Claude solo agrega campos nuevos.
   let mergedInfo = businessInfo;
+  let existingEmail: string | null = null;
   try {
     const existingSession = await getSession(sessionId);
+    existingEmail = existingSession?.email || null;
     if (existingSession?.business_info && typeof existingSession.business_info === 'object') {
       const existing = existingSession.business_info as Record<string, unknown>;
       // Start with Claude's extracted data, then overlay existing non-null values
@@ -844,10 +846,13 @@ Rules:
     console.warn('[Pioneer Action] Could not merge business_info, using extracted only:', mergeErr);
   }
 
+  // Preserve existing session email if merge doesn't have one
+  const emailToSave = mergedInfo.email || existingEmail || null;
+
   await updateSession(sessionId, {
     business_name: mergedInfo.business_name || null,
     business_info: mergedInfo,
-    email: mergedInfo.email || null,
+    email: emailToSave,
     status: 'active',
   });
 
