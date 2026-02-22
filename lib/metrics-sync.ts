@@ -3,6 +3,9 @@
 // Pulls post performance metrics from Late.dev Analytics API
 // and saves them to the metrics table in Supabase.
 //
+// Also syncs post status: updates "scheduled" → "published" when Late.dev
+// confirms the post has been published.
+//
 // Called by: /api/cron/suggestions (same daily cron, after suggestions)
 // Also callable: GET /api/metrics/sync
 //
@@ -16,9 +19,11 @@ const PIONEER_PROFILE_ID = '6984c371b984889d86a8b3d6';
 
 export async function syncAllMetrics(): Promise<{
   synced: number;
+  statusUpdated: number;
   errors: string[];
 }> {
   let synced = 0;
+  let statusUpdated = 0;
   const errors: string[] = [];
 
   try {
@@ -52,12 +57,13 @@ export async function syncAllMetrics(): Promise<{
           const lateId = post.latePostId || post.postId;
           
           // Try to find the post in our DB — check both ID fields
-          let dbPost = null;
+          // Include status so we can sync it
+          let dbPost: { id: string; status: string } | null = null;
           
           // First try late_post_id (set after activation)
           const { data: byPostId } = await supabase
             .from('posts')
-            .select('id')
+            .select('id, status')
             .eq('late_post_id', lateId)
             .maybeSingle();
           
@@ -67,7 +73,7 @@ export async function syncAllMetrics(): Promise<{
             // Fallback: try late_draft_id (set at draft creation)
             const { data: byDraftId } = await supabase
               .from('posts')
-              .select('id')
+              .select('id, status')
               .eq('late_draft_id', lateId)
               .maybeSingle();
             dbPost = byDraftId;
@@ -78,6 +84,31 @@ export async function syncAllMetrics(): Promise<{
             continue;
           }
 
+          // === STATUS SYNC ===
+          // If Late.dev says the post is published but our DB still says scheduled,
+          // update our DB to reflect the real status.
+          const lateStatus = post.status?.toLowerCase();
+          if (
+            lateStatus === 'published' &&
+            dbPost.status === 'scheduled'
+          ) {
+            const { error: statusError } = await supabase
+              .from('posts')
+              .update({
+                status: 'published',
+                published_at: post.publishedAt || new Date().toISOString(),
+              })
+              .eq('id', dbPost.id);
+
+            if (statusError) {
+              errors.push(`Status update ${dbPost.id}: ${statusError.message}`);
+            } else {
+              statusUpdated++;
+              console.log(`[MetricsSync] Status updated: ${dbPost.id} scheduled → published`);
+            }
+          }
+
+          // === METRICS SYNC ===
           await upsertMetric(dbPost.id, {
             late_post_id: lateId,
             platform: post.platform,
@@ -106,12 +137,12 @@ export async function syncAllMetrics(): Promise<{
       }
     }
 
-    console.log(`[MetricsSync] Done: ${synced} posts synced, ${errors.length} errors`);
+    console.log(`[MetricsSync] Done: ${synced} posts synced, ${statusUpdated} status updated, ${errors.length} errors`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     errors.push(`Fatal: ${msg}`);
     console.error('[MetricsSync] Fatal error:', err);
   }
 
-  return { synced, errors };
+  return { synced, statusUpdated, errors };
 }

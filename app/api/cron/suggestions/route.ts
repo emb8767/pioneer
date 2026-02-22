@@ -22,8 +22,8 @@ export async function GET(request: NextRequest) {
 
   console.log('[Pioneer Cron] Starting daily metrics sync + suggestion generation...');
 
-  // Step 1: Sync metrics from Late.dev
-  let metricsResult = { synced: 0, errors: [] as string[] };
+  // Step 1: Sync metrics + post status from Late.dev
+  let metricsResult = { synced: 0, statusUpdated: 0, errors: [] as string[] };
   try {
     metricsResult = await syncAllMetrics();
     console.log(`[Pioneer Cron] Metrics: ${metricsResult.synced} posts synced, ${metricsResult.errors.length} errors`);
