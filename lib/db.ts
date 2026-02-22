@@ -658,39 +658,73 @@ export async function saveContextSummary(
 // ============================================================
 
 export interface PerformanceData {
+  // Plans
   totalPlans: number;
   completedPlans: number;
+  activePlans: number;
+  // Posts — granular breakdown
   totalPosts: number;
+  scheduledPosts: number;
   publishedPosts: number;
+  pendingPosts: number;
+  // Engagement metrics
   totalImpressions: number;
   totalLikes: number;
   totalComments: number;
+  totalShares: number;
+  totalClicks: number;
+  totalViews: number;
   avgEngagementRate: number;
+  // Next scheduled post
+  nextPost: {
+    title: string;
+    scheduledFor: string;
+  } | null;
 }
 
 export async function getPerformanceData(sessionId: string): Promise<PerformanceData> {
   const defaults: PerformanceData = {
-    totalPlans: 0, completedPlans: 0,
-    totalPosts: 0, publishedPosts: 0,
+    totalPlans: 0, completedPlans: 0, activePlans: 0,
+    totalPosts: 0, scheduledPosts: 0, publishedPosts: 0, pendingPosts: 0,
     totalImpressions: 0, totalLikes: 0, totalComments: 0,
+    totalShares: 0, totalClicks: 0, totalViews: 0,
     avgEngagementRate: 0,
+    nextPost: null,
   };
 
   try {
     const plans = await getAllPlans(sessionId);
     defaults.totalPlans = plans.length;
     defaults.completedPlans = plans.filter(p => p.status === 'completed').length;
+    defaults.activePlans = plans.filter(p => p.status === 'approved' || p.status === 'in_progress').length;
 
     const planIds = plans.map(p => p.id);
     if (planIds.length > 0) {
       const { data: posts } = await supabase
         .from('posts')
-        .select('id, status')
+        .select('id, status, title, scheduled_for')
         .in('plan_id', planIds);
 
       if (posts) {
         defaults.totalPosts = posts.length;
-        defaults.publishedPosts = posts.filter(p => p.status === 'scheduled' || p.status === 'published').length;
+        defaults.scheduledPosts = posts.filter(p => p.status === 'scheduled').length;
+        defaults.publishedPosts = posts.filter(p => p.status === 'published').length;
+        defaults.pendingPosts = posts.filter(p =>
+          p.status === 'pending' || p.status === 'content_ready' || p.status === 'image_ready'
+        ).length;
+
+        // Find next scheduled post (closest future date)
+        const now = new Date().toISOString();
+        const upcoming = posts
+          .filter(p => p.status === 'scheduled' && p.scheduled_for && p.scheduled_for > now)
+          .sort((a, b) => (a.scheduled_for || '').localeCompare(b.scheduled_for || ''));
+
+        if (upcoming.length > 0) {
+          defaults.nextPost = {
+            title: upcoming[0].title || 'Post sin título',
+            scheduledFor: upcoming[0].scheduled_for!,
+          };
+        }
       }
     }
 
@@ -699,6 +733,9 @@ export async function getPerformanceData(sessionId: string): Promise<Performance
       defaults.totalImpressions = metrics.reduce((sum, m) => sum + (m.impressions || 0), 0);
       defaults.totalLikes = metrics.reduce((sum, m) => sum + (m.likes || 0), 0);
       defaults.totalComments = metrics.reduce((sum, m) => sum + (m.comments || 0), 0);
+      defaults.totalShares = metrics.reduce((sum, m) => sum + (m.shares || 0), 0);
+      defaults.totalClicks = metrics.reduce((sum, m) => sum + (m.clicks || 0), 0);
+      defaults.totalViews = metrics.reduce((sum, m) => sum + (m.views || 0), 0);
       const rates = metrics.filter(m => m.engagement_rate > 0).map(m => m.engagement_rate);
       defaults.avgEngagementRate = rates.length > 0
         ? rates.reduce((sum, r) => sum + r, 0) / rates.length
